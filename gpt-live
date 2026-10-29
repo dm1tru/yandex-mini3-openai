@@ -1,0 +1,75 @@
+#!/bin/sh
+set -eu
+SELF=/data/opt/bin/gpt-live
+RUN=/tmp/mini3-gpt-live
+LOG=/tmp/gpt-live.log
+active() {
+    [ -f "$RUN/pid" ] || return 1
+    pid=$(cat "$RUN/pid")
+    case "$pid" in ''|*[!0-9]*) return 1;; esac
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '/data/opt/bin/gpt-live run'
+}
+case "${1:-status}" in
+start)
+    [ -s /data/opt/openai/key.txt ] || { echo "OpenAI key is missing." >&2; exit 1; }
+    [ ! -d /tmp/mini3-vosk-live ] || { echo "Stop vosk-live first." >&2; exit 1; }
+    if active; then echo 'GPT is already running.'; exit 0; fi
+    if [ -d "$RUN" ]; then echo 'Stale run directory; inspect /tmp/mini3-gpt-live before restarting.' >&2; exit 1; fi
+    [ ! -d /tmp/mini3-vosk-test.lock ] || { echo 'Stop vosk-test first.' >&2; exit 1; }
+    if [ -f "$LOG" ]; then mv "$LOG" "$LOG.previous"; fi
+    nohup "$SELF" run >"$LOG" 2>&1 </dev/null &
+    echo 'Starting GPT. Watch: tail -f /tmp/gpt-live.log'
+    ;;
+run)
+    mkdir "$RUN" || exit 1
+    echo $$ > "$RUN/pid"
+    restore=0
+    child=''
+    cleanup() {
+        trap - EXIT INT TERM
+        if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi
+        if [ "$restore" = 1 ]; then
+            /etc/init.d/S99quasar start >/tmp/vosk-alice-restart.log 2>&1 &
+        fi
+        rm -f "$RUN/pid"
+        rmdir "$RUN"
+    }
+    trap cleanup EXIT
+    trap 'exit 0' INT TERM
+    if ! grep -q '^/dev/zram0 ' /proc/swaps; then
+        if [ "$(cat /sys/block/zram0/disksize)" = 0 ]; then
+            echo 167772160 > /sys/block/zram0/disksize
+            mkswap /dev/zram0 >/dev/null
+        fi
+        swapon /dev/zram0
+    fi
+    for p in /proc/[0-9]*; do
+        if [ "$(readlink "$p/exe" 2>/dev/null || true)" = /system/vendor/quasar/quasar_launcher2 ]; then
+            restore=1
+            kill -TERM "${p##*/}"
+        fi
+    done
+    n=0
+    while fuser /dev/snd/pcmC0D1c >/dev/null 2>&1; do
+        n=$((n+1))
+        [ "$n" -lt 15 ] || { echo 'Microphone is still occupied.' >&2; exit 1; }
+        sleep 1
+    done
+    amixer sset 'PDM Gain' 36 >/dev/null
+    GOMEMLIMIT=24MiB GOGC=50 /data/opt/bin/mini3-openai listen &
+    child=$!
+    wait "$child"
+    ;;
+stop)
+    if active; then
+        kill -TERM "$pid"
+        echo 'Stopping GPT; Alice will be restored if it was running.'
+    else echo 'GPT is not running.'; fi
+    ;;
+status)
+    if active; then echo "GPT running (supervisor PID $pid)"; else echo 'GPT is not running.'; fi
+    [ ! -f "$LOG" ] || tail -n 6 "$LOG"
+    ;;
+*) echo 'Usage: gpt-live start|stop|status' >&2; exit 2;;
+esac

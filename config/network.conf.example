@@ -1,0 +1,12 @@
+# Example only: TEST-NET addresses are not usable service endpoints.
+# Install as root-owned /data/opt/etc/wireguard/network.conf, mode 600.
+# Replace every address with your own values. Never commit the filled-in file.
+ENDPOINT=203.0.113.10
+ENDPOINT_PORT=51820
+NTP=203.0.113.123
+LAN_INTERFACE=wlan0
+GATEWAY=198.51.100.1
+LAN_CIDR=198.51.100.0/24
+VPN_ADDRESS=192.0.2.2/32
+MTU=1420
+DNS=1.1.1.1

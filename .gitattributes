@@ -1,0 +1,16 @@
+* text=auto
+*.c text eol=lf
+*.go text eol=lf
+*.mod text eol=lf
+*.md text eol=lf
+*.example text eol=lf
+LICENSE text eol=lf
+.gitignore text eol=lf
+.dockerignore text eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
+gpt-live text eol=lf
+vosk-live text eol=lf
+vosk-test text eol=lf
+S98mini3wg.v2 text eol=lf
+mini3-dhcpcd.exit-hook text eol=lf

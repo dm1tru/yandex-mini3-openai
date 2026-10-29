@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!mini3-openai
+!mini3-openai/*.go
+!mini3-openai/go.mod
+!vosk-stream.c
+!vosk-transcribe.c
+!buildtools
+!buildtools/*.go

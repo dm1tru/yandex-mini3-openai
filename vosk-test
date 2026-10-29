@@ -1,0 +1,49 @@
+#!/bin/sh
+set -eu
+BASE=/data/opt/vosk
+BIN=/data/opt/bin/vosk-transcribe
+LOCK=/tmp/mini3-vosk-test.lock
+[ ! -d /tmp/mini3-gpt-live ] || { echo 'Stop gpt-live first.' >&2; exit 1; }
+[ ! -d /tmp/mini3-vosk-live ] || { echo 'Stop vosk-live first: /data/opt/bin/vosk-live stop' >&2; exit 1; }
+mkdir "$LOCK" 2>/dev/null || { echo 'Vosk test is already running.' >&2; exit 1; }
+restore=0
+cleanup() {
+    if [ "$restore" = 1 ]; then
+        /etc/init.d/S99quasar start > /tmp/vosk-alice-restart.log 2>&1 &
+    fi
+    rmdir "$LOCK"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# Enable compressed RAM swap only when needed; never reset an active device.
+if ! grep -q '^/dev/zram0 ' /proc/swaps; then
+    if [ "$(cat /sys/block/zram0/disksize)" = 0 ]; then
+        echo 167772160 > /sys/block/zram0/disksize
+        mkswap /dev/zram0 >/dev/null
+    fi
+    swapon /dev/zram0
+fi
+if [ "$#" -gt 1 ]; then echo 'Usage: vosk-test [PCM16_WAV]' >&2; exit 2; fi
+if [ "$#" = 1 ]; then
+    recording=$1
+else
+    for p in /proc/[0-9]*; do
+        if [ "$(readlink "$p/exe" 2>/dev/null || true)" = /system/vendor/quasar/quasar_launcher2 ]; then
+            restore=1
+            kill -TERM "${p##*/}"
+        fi
+    done
+    sleep 2
+    amixer sset 'PDM Gain' 36 >/dev/null
+    recording=/tmp/vosk-live.wav
+    echo 'Recording for 11 seconds. Wait one second, then speak Russian.'
+    arecord -q -D hw:0,1 -t wav -f S16_LE -r 48000 -c 8 -d 11 "$recording"
+fi
+echo 'Recognizing locally...'
+if "$BIN" "$BASE/model-ru" "$recording" 2>/tmp/vosk-test.log; then
+    tail -n 1 /tmp/vosk-test.log
+else
+    cat /tmp/vosk-test.log >&2
+    exit 1
+fi

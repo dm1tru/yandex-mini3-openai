@@ -1,0 +1,100 @@
+#!/bin/sh
+PATH=/data/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
+DIR=/data/opt/etc/wireguard
+CONFIG=${MINI3_WG_CONFIG:-$DIR/network.conf}
+if [ ! -r "$CONFIG" ]; then
+    echo "Missing local network configuration: $CONFIG (see config/network.conf.example)" >&2
+    exit 1
+fi
+# Root-owned shell configuration; never commit the filled-in file.
+. "$CONFIG"
+LAN_INTERFACE=${LAN_INTERFACE:-wlan0}
+ENDPOINT_PORT=${ENDPOINT_PORT:-51820}
+MTU=${MTU:-1420}
+DNS=${DNS:-1.1.1.1}
+ipv4() {
+    printf '%s\n' "$1" | awk -F. 'NF != 4 { exit 1 } { for (i=1; i<=4; i++) if ($i !~ /^[0-9]+$/ || length($i)>3 || $i>255) exit 1 }'
+}
+cidr() {
+    case "$1" in */*) ;; *) return 1;; esac
+    address=${1%/*}; prefix=${1##*/}
+    ipv4 "$address" || return 1
+    case "$prefix" in ''|*[!0-9]*) return 1;; esac
+    [ "${#prefix}" -le 2 ] && [ "$prefix" -le 32 ]
+}
+for value in "${ENDPOINT:-}" "${NTP:-}" "${GATEWAY:-}" "$DNS"; do
+    ipv4 "$value" || { echo 'ENDPOINT, NTP, GATEWAY and DNS must be numeric IPv4 addresses.' >&2; exit 1; }
+done
+cidr "${LAN_CIDR:-}" && cidr "${VPN_ADDRESS:-}" || { echo 'LAN_CIDR and VPN_ADDRESS must be IPv4 CIDRs.' >&2; exit 1; }
+case "$LAN_INTERFACE" in ''|*[!a-zA-Z0-9_.:-]*) echo 'Invalid LAN_INTERFACE' >&2; exit 1;; esac
+case "$ENDPOINT_PORT:$MTU" in *[!0-9:]*) echo 'Port and MTU must be integers.' >&2; exit 1;; esac
+[ "${#ENDPOINT_PORT}" -le 5 ] && [ "$ENDPOINT_PORT" -ge 1 ] && [ "$ENDPOINT_PORT" -le 65535 ] &&
+[ "${#MTU}" -le 4 ] && [ "$MTU" -ge 576 ] && [ "$MTU" -le 9000 ] || { echo 'Port or MTU out of range.' >&2; exit 1; }
+
+refresh() {
+    ip -4 addr show "$LAN_INTERFACE" | grep -q 'inet ' || return 1
+    ip route replace "$LAN_CIDR" dev "$LAN_INTERFACE" table 200 || return 1
+    ip route replace default via "$GATEWAY" dev "$LAN_INTERFACE" table 200 || return 1
+    ip rule show | grep -q '^100:.*lookup 200' || ip rule add priority 100 to "$ENDPOINT/32" lookup 200 || return 1
+    ip rule show | grep -q '^101:.*lookup 200' || ip rule add priority 101 to "$NTP/32" lookup 200 || return 1
+    printf 'nameserver %s\n' "$DNS" > /tmp/resolv.conf
+}
+
+bring_up() (
+    set -e
+    umask 077
+    mkdir /run/mini3-wg.lock 2>/dev/null || exit 0
+    trap 'rm -f /run/mini3-wg.conf; rmdir /run/mini3-wg.lock' EXIT
+    count=0
+    until refresh; do
+        count=$((count + 1))
+        [ "$count" -lt 120 ] || { echo 'Wi-Fi timeout'; exit 1; }
+        sleep 1
+    done
+    # Direct NTP prevents a stale clock from deadlocking VPN startup.
+    chronyc add server "$NTP" iburst >/dev/null 2>&1 || true
+    chronyc makestep 0.1 1 >/dev/null
+    chronyc burst 4/4 >/dev/null
+    count=0
+    until chronyc tracking | grep -q 'Leap status.*Normal'; do
+        count=$((count + 1))
+        [ "$count" -lt 60 ] || { echo 'NTP not synchronised; VPN startup stopped'; exit 1; }
+        sleep 2
+    done
+    chronyc makestep >/dev/null
+    test -s "$DIR/wg0.conf"
+    sed "s/^[[:space:]]*Endpoint[[:space:]]*=.*/Endpoint = $ENDPOINT:$ENDPOINT_PORT/" "$DIR/wg0.conf" > /run/mini3-wg.conf
+    chmod 600 /run/mini3-wg.conf
+    if ! ip link show wg0 >/dev/null 2>&1; then
+        /data/opt/bin/wireguard-go wg0
+    fi
+    /data/opt/bin/wg setconf wg0 /run/mini3-wg.conf
+    ip addr replace "$VPN_ADDRESS" dev wg0
+    ip link set wg0 mtu "$MTU" up
+    for setting in /proc/sys/net/ipv6/conf/all/disable_ipv6 /proc/sys/net/ipv6/conf/default/disable_ipv6; do
+        if [ -f "$setting" ]; then echo 1 > "$setting"; fi
+    done
+    ip route replace 0.0.0.0/1 dev wg0
+    ip route replace 128.0.0.0/1 dev wg0
+    refresh
+    echo "$(date -u) WireGuard configured after NTP sync."
+)
+
+case "$1" in
+    start)
+        mkdir -p "$DIR"
+        chmod 700 "$DIR"
+        "$0" up </dev/null >>"$DIR/startup.log" 2>&1 &
+        ;;
+    up) bring_up ;;
+    refresh) refresh ;;
+    status)
+        /data/opt/bin/wg show wg0
+        ip rule show
+        ip -4 route show table 200
+        ip -4 route show
+        cat /etc/resolv.conf
+        chronyc tracking
+        ;;
+    *) echo "Usage: $0 {start|up|refresh|status}"; exit 1 ;;
+esac

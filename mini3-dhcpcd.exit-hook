@@ -1,0 +1,11 @@
+# Restore VPN endpoint policy routes and DNS after LAN lease changes.
+if [ -r /data/opt/etc/wireguard/network.conf ]; then
+    . /data/opt/etc/wireguard/network.conf
+fi
+if [ "$interface" = "${LAN_INTERFACE:-wlan0}" ]; then
+    case "$reason" in
+        BOUND|RENEW|REBIND|REBOOT|INFORM|STATIC)
+            /etc/init.d/S98mini3wg refresh >/dev/null 2>&1
+            ;;
+    esac
+fi
