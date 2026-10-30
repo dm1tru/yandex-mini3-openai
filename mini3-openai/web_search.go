@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -167,7 +168,12 @@ func (a *api) searchTickets(ctx context.Context, arguments string) ([]byte, erro
 		trip += ", обратно " + returnDate.Format("2006-01-02")
 	}
 	input := "Найди в интернете актуальные предложения на билеты: " + trip + ". Используй поиск с точными названиями городов и датой. Проверяй прежде всего цены на travel.yandex.ru и aviasales.ru для самолётов, а для поездов — travel.yandex.ru, tutu.ru, rasp.ru и rzd.ru. Ответь по-русски кратко, максимум тремя вариантами. Для каждого назови перевозчика или продавца, цену и валюту, а также время отправления и багаж, только если эти сведения найдены в источнике. Не выдумывай тарифы, расписание или наличие мест; если цена не опубликована, прямо скажи об этом. Отличай точную цену от цены «от». Укажи названия источников. Это поиск, не бронирование; предупреди, что цена и наличие могут измениться."
-	return a.searchWebInput(ctx, input, "medium", 700, []string{"travel.yandex.ru", "aviasales.ru", "tutu.ru", "rasp.ru", "rzd.ru"})
+	result, err := a.searchWebInput(ctx, input, "medium", 700, []string{"travel.yandex.ru", "aviasales.ru", "tutu.ru", "rasp.ru", "rzd.ru"})
+	if err == nil || !strings.Contains(err.Error(), "web search returned no answer") {
+		return result, err
+	}
+	fmt.Fprintln(os.Stderr, "Ticket search: targeted sources returned no answer; retrying broad web search")
+	return a.searchWebInput(ctx, input, "medium", 700, nil)
 }
 
 func (a *api) searchWebInput(ctx context.Context, input, contextSize string, maxOutputTokens int, allowedDomains []string) ([]byte, error) {
