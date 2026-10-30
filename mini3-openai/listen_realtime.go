@@ -86,7 +86,7 @@ func (a *api) listenRealtime(ctx context.Context) error {
 	}()
 	rtDone := make(chan realtimeEvent, 4)
 	rtErrors := make(chan error, 1)
-	go realtimeReceiver(ctx, w, h, rtDone, rtErrors)
+	go realtimeReceiver(ctx, w, a, h, rtDone, rtErrors)
 
 	var preroll [][]byte
 	active := false

@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-const realtimeInstruction = "Ты — голосовой помощник в домашней колонке. Отвечай по-русски и кратко, обычно 1–3 предложениями. Не утверждай, что управляешь устройствами или имеешь доступ к текущим данным: таких инструментов у тебя нет."
+const realtimeInstruction = "Ты — голосовой помощник в домашней колонке. Отвечай по-русски и кратко, обычно 1–3 предложениями. Для актуальных фактов и когда пользователь просит поиск в интернете используй инструмент web_search. Отвечай по найденным источникам; по возможности называй источники, но не зачитывай URL. Если поиск завершился ошибкой, скажи об этом и не выдумывай актуальные данные."
 
 type wsClient struct {
 	conn    net.Conn
@@ -97,6 +97,18 @@ func connectRealtime(ctx context.Context, key, model, voice string) (*wsClient, 
 	}
 	update := map[string]any{"type": "session.update", "session": map[string]any{
 		"type": "realtime", "output_modalities": []string{"audio"}, "instructions": realtimeInstruction,
+		"tools": []any{map[string]any{
+			"type": "function",
+			"name": "web_search",
+			"description": "Search the public web for current facts and answer questions that require up-to-date information.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{"query": map[string]any{"type": "string", "description": "Concise search query with relevant context."}},
+				"required": []string{"query"},
+				"additionalProperties": false,
+			},
+		}},
+		"tool_choice": "auto",
 		"audio": map[string]any{
 			"input":  map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": 24000}, "turn_detection": nil, "noise_reduction": map[string]any{"type": "far_field"}},
 			"output": map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": 24000}, "voice": voice},
@@ -284,6 +296,12 @@ type realtimeEvent struct {
 	Type  string `json:"type"`
 	Delta string `json:"delta"`
 	Text  string `json:"text"`
+	Item  struct {
+		Type      string `json:"type"`
+		Name      string `json:"name"`
+		CallID    string `json:"call_id"`
+		Arguments string `json:"arguments"`
+	} `json:"item"`
 	Error struct {
 		Message string `json:"message"`
 	} `json:"error"`
@@ -292,10 +310,11 @@ type realtimeEvent struct {
 	} `json:"response"`
 }
 
-func realtimeReceiver(ctx context.Context, w *wsClient, h *hardware, events chan<- realtimeEvent, errs chan<- error) {
+func realtimeReceiver(ctx context.Context, w *wsClient, a *api, h *hardware, events chan<- realtimeEvent, errs chan<- error) {
 	var player *exec.Cmd
 	var stdin io.WriteCloser
 	muted := false
+	var pendingFunctionCall *realtimeEvent
 	finish := func() {
 		if stdin != nil {
 			_ = stdin.Close()
@@ -362,12 +381,41 @@ func realtimeReceiver(ctx context.Context, w *wsClient, h *hardware, events chan
 			if ev.Delta != "" {
 				fmt.Print(ev.Delta)
 			}
+		case "response.output_item.done":
+			if ev.Item.Type == "function_call" {
+				call := ev
+				pendingFunctionCall = &call
+			}
 		case "response.done":
 			if ev.Response.Status != "completed" {
 				errs <- fmt.Errorf("Realtime response status: %s", ev.Response.Status)
 				return
 			}
 			finish()
+			if pendingFunctionCall != nil {
+				call := *pendingFunctionCall
+				pendingFunctionCall = nil
+				if call.Item.CallID == "" {
+					errs <- errors.New("Realtime function call is missing call_id")
+					return
+				}
+				h.set("thinking", 0)
+				output, toolErr := a.runRealtimeFunction(ctx, call.Item.Name, call.Item.Arguments)
+				if toolErr != nil {
+					output, _ = json.Marshal(map[string]string{"error": toolErr.Error()})
+				}
+				if e := w.sendJSON(map[string]any{"type": "conversation.item.create", "item": map[string]any{
+					"type": "function_call_output", "call_id": call.Item.CallID, "output": string(output),
+				}}); e != nil {
+					errs <- e
+					return
+				}
+				if e := w.sendJSON(map[string]any{"type": "response.create", "response": map[string]any{"tool_choice": "none"}}); e != nil {
+					errs <- e
+					return
+				}
+				continue
+			}
 			h.set("idle", 0)
 			events <- ev
 		}
