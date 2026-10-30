@@ -89,7 +89,7 @@ func (a *api) searchWeb(ctx context.Context, arguments string) ([]byte, error) {
 	}
 
 	input := "Найди в интернете актуальную информацию по запросу: " + query + ". Ответь по-русски кратко и только на основе найденных источников."
-	return a.searchWebInput(ctx, input, "low", 400, nil)
+	return a.searchWebInput(ctx, input, "medium", 1200, nil)
 }
 
 type ticketSearchArguments struct {
