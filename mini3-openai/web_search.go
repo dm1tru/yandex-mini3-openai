@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type realtimeSearchArguments struct {
@@ -70,6 +71,8 @@ func (a *api) runRealtimeFunction(ctx context.Context, name, arguments string, h
 		return json.Marshal(map[string]any{"status": "ok", "volume_percent": level})
 	case "web_search":
 		return a.searchWeb(ctx, arguments)
+	case "search_tickets":
+		return a.searchTickets(ctx, arguments)
 	default:
 		return nil, fmt.Errorf("unsupported tool: %s", name)
 	}
@@ -85,15 +88,97 @@ func (a *api) searchWeb(ctx context.Context, arguments string) ([]byte, error) {
 		return nil, errors.New("search query must contain 1 to 600 characters")
 	}
 
+	input := "Найди в интернете актуальную информацию по запросу: " + query + ". Ответь по-русски кратко и только на основе найденных источников."
+	return a.searchWebInput(ctx, input, "low")
+}
+
+type ticketSearchArguments struct {
+	Origin        string `json:"origin"`
+	Destination   string `json:"destination"`
+	DepartureDate string `json:"departure_date"`
+	ReturnDate    string `json:"return_date"`
+	Transport     string `json:"transport"`
+	Passengers    int    `json:"passengers"`
+}
+
+func ticketField(value, name string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || len([]rune(value)) > 80 {
+		return "", fmt.Errorf("%s must contain 1 to 80 characters", name)
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return "", fmt.Errorf("%s contains an invalid character", name)
+		}
+	}
+	return value, nil
+}
+
+func (a *api) searchTickets(ctx context.Context, arguments string) ([]byte, error) {
+	var args ticketSearchArguments
+	d := json.NewDecoder(strings.NewReader(arguments))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&args); err != nil {
+		return nil, errors.New("invalid ticket search arguments")
+	}
+	origin, err := ticketField(args.Origin, "origin")
+	if err != nil {
+		return nil, err
+	}
+	destination, err := ticketField(args.Destination, "destination")
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(origin, destination) {
+		return nil, errors.New("origin and destination must differ")
+	}
+	departure, err := time.Parse("2006-01-02", strings.TrimSpace(args.DepartureDate))
+	if err != nil {
+		return nil, errors.New("departure_date must use YYYY-MM-DD")
+	}
+	transport := strings.TrimSpace(args.Transport)
+	if transport == "" {
+		transport = "both"
+	}
+	var transportText string
+	switch transport {
+	case "flight":
+		transportText = "авиабилеты"
+	case "train":
+		transportText = "билеты на поезд"
+	case "both":
+		transportText = "авиабилеты и билеты на поезд"
+	default:
+		return nil, errors.New("transport must be flight, train, or both")
+	}
+	passengers := args.Passengers
+	if passengers == 0 {
+		passengers = 1
+	}
+	if passengers < 1 || passengers > 9 {
+		return nil, errors.New("passengers must be between 1 and 9")
+	}
+	trip := fmt.Sprintf("%s из %s в %s на %s, %d пассажир(а)", transportText, origin, destination, departure.Format("2006-01-02"), passengers)
+	if strings.TrimSpace(args.ReturnDate) != "" {
+		returnDate, e := time.Parse("2006-01-02", strings.TrimSpace(args.ReturnDate))
+		if e != nil || returnDate.Before(departure) {
+			return nil, errors.New("return_date must be a valid YYYY-MM-DD date on or after departure_date")
+		}
+		trip += ", обратно " + returnDate.Format("2006-01-02")
+	}
+	input := "Найди в интернете актуальные предложения на билеты: " + trip + ". Ищи публичные предложения авиакомпаний, железнодорожных перевозчиков и известных продавцов. Ответь по-русски кратко, максимум тремя вариантами. Для каждого назови перевозчика или продавца, цену и валюту, а также время отправления и багаж, только если эти сведения найдены в источнике. Не выдумывай тарифы, расписание или наличие мест; если цена не опубликована, прямо скажи об этом. Отличай точную цену от цены «от». Укажи названия источников. Это поиск, не бронирование; предупреди, что цена и наличие могут измениться."
+	return a.searchWebInput(ctx, input, "medium")
+}
+
+func (a *api) searchWebInput(ctx context.Context, input, contextSize string) ([]byte, error) {
 	searchCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
-	input := "Найди в интернете актуальную информацию по запросу: " + query + ". Ответь по-русски кратко и только на основе найденных источников."
 	body := map[string]any{
 		"model":             a.model,
 		"store":             false,
 		"max_output_tokens": 400,
 		"input":             input,
-		"tools":             []any{map[string]any{"type": "web_search", "search_context_size": "low"}},
+		"tools":             []any{map[string]any{"type": "web_search", "search_context_size": contextSize}},
 		"include":           []string{"web_search_call.action.sources"},
 	}
 	data, err := a.post(searchCtx, "/responses", body, 2<<20)

@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-const realtimeInstruction = "Ты — голосовой помощник в домашней колонке. Отвечай по-русски и кратко, обычно 1–3 предложениями. Для актуальных фактов и когда пользователь просит поиск в интернете используй инструмент web_search. Отвечай по найденным источникам; по возможности называй источники, но не зачитывай URL. Если поиск завершился ошибкой, скажи об этом и не выдумывай актуальные данные. Для точной установки громкости используй set_volume, для относительной — adjust_volume; после успешного изменения назови итоговую громкость. Если инструмент сообщил об ошибке, не утверждай, что действие выполнено."
+const realtimeInstruction = "Ты — голосовой помощник в домашней колонке. Отвечай по-русски и кратко, обычно 1–3 предложениями. Для актуальных фактов и когда пользователь просит поиск в интернете используй инструмент web_search. Для поиска билетов уточни города отправления и назначения и дату; если не указан транспорт, ищи самолёт и поезд, если не указано число пассажиров — считай одного. Для поездки туда-обратно уточни дату возвращения. Используй search_tickets и называй только цены, найденные в источниках; уточняй, если цена ориентировочная или наличие нужно проверить у продавца. Не утверждай, что билет забронирован или куплен. Отвечай по найденным источникам; по возможности называй источники, но не зачитывай URL. Если поиск завершился ошибкой, скажи об этом и не выдумывай актуальные данные. Для точной установки громкости используй set_volume, для относительной — adjust_volume; после успешного изменения назови итоговую громкость. Если инструмент сообщил об ошибке, не утверждай, что действие выполнено."
 
 func realtimeFunctionTool(name, description string, parameters map[string]any) map[string]any {
 	return map[string]any{"type": "function", "name": name, "description": description, "parameters": parameters}
@@ -100,12 +100,25 @@ func connectRealtime(ctx context.Context, key, model, voice string) (*wsClient, 
 		}
 	}
 	update := map[string]any{"type": "session.update", "session": map[string]any{
-		"type": "realtime", "output_modalities": []string{"audio"}, "instructions": realtimeInstruction,
+		"type": "realtime", "output_modalities": []string{"audio"}, "instructions": fmt.Sprintf("%s Сегодня %s.", realtimeInstruction, time.Now().Format("2006-01-02")),
 		"tools": []any{
 			realtimeFunctionTool("web_search", "Search the public web for current facts and answer questions that require up-to-date information.", map[string]any{
 				"type": "object",
 				"properties": map[string]any{"query": map[string]any{"type": "string", "description": "Concise search query with relevant context."}},
 				"required": []string{"query"},
+				"additionalProperties": false,
+			}),
+			realtimeFunctionTool("search_tickets", "Search current public offers for air and train tickets. Ask for missing origin, destination, or departure date first. Use ISO dates (YYYY-MM-DD); return_date is only for round trips. If transport is omitted, search both flights and trains.", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"origin": map[string]any{"type": "string", "description": "Departure city or station."},
+					"destination": map[string]any{"type": "string", "description": "Arrival city or station."},
+					"departure_date": map[string]any{"type": "string", "description": "Departure date in YYYY-MM-DD format."},
+					"return_date": map[string]any{"type": "string", "description": "Return date in YYYY-MM-DD format for round trips; omit for one-way."},
+					"transport": map[string]any{"type": "string", "enum": []string{"flight", "train", "both"}, "description": "Transport type. Defaults to both."},
+					"passengers": map[string]any{"type": "integer", "minimum": 1, "maximum": 9, "description": "Number of passengers; defaults to 1."},
+				},
+				"required": []string{"origin", "destination", "departure_date"},
 				"additionalProperties": false,
 			}),
 			realtimeFunctionTool("set_volume", "Set the speaker Master volume to an exact percentage.", map[string]any{
