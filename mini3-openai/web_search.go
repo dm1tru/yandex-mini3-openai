@@ -89,7 +89,7 @@ func (a *api) searchWeb(ctx context.Context, arguments string) ([]byte, error) {
 	}
 
 	input := "Найди в интернете актуальную информацию по запросу: " + query + ". Ответь по-русски кратко и только на основе найденных источников."
-	return a.searchWebInput(ctx, input, "medium", 1200, nil)
+	return a.searchWebInput(ctx, input, "medium", 3000, nil)
 }
 
 type ticketSearchArguments struct {
@@ -191,7 +191,10 @@ func (a *api) searchWebInput(ctx context.Context, input, contextSize string, max
 	}
 
 	var response struct {
-		Status string `json:"status"`
+		Status            string `json:"status"`
+		IncompleteDetails struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
 		Output []struct {
 			Type    string `json:"type"`
 			Action  struct {
@@ -254,7 +257,7 @@ func (a *api) searchWebInput(ctx context.Context, input, contextSize string, max
 	}
 	text := strings.TrimSpace(answer.String())
 	if text == "" {
-		return nil, fmt.Errorf("web search returned no answer (status %s)", response.Status)
+		return nil, fmt.Errorf("web search returned no answer (status %s, reason %s)", response.Status, response.IncompleteDetails.Reason)
 	}
 	if runes := []rune(text); len(runes) > 3000 {
 		text = string(runes[:3000])
