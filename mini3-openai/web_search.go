@@ -89,7 +89,7 @@ func (a *api) searchWeb(ctx context.Context, arguments string) ([]byte, error) {
 	}
 
 	input := "Найди в интернете актуальную информацию по запросу: " + query + ". Ответь по-русски кратко и только на основе найденных источников."
-	return a.searchWebInput(ctx, input, "medium", 3000, nil)
+	return a.searchWebInput(ctx, input, "low", 400, nil)
 }
 
 type ticketSearchArguments struct {
@@ -166,8 +166,8 @@ func (a *api) searchTickets(ctx context.Context, arguments string) ([]byte, erro
 		}
 		trip += ", обратно " + returnDate.Format("2006-01-02")
 	}
-	input := "Найди в интернете актуальные цены по запросу: " + trip + ". Проверь билеты и тарифы на Яндекс Путешествиях, Aviasales, Tutu, Rasp и сайте РЖД. Ответь по-русски кратко, максимум тремя вариантами: перевозчик, цена и валюта, время отправления — только если это найдено в источнике. Отличай цену «от» от точной. Если цены не найдены, прямо скажи. Не выдумывай стоимость, расписание или наличие мест; покупку не оформляй. Укажи названия источников и предупреди, что цена может измениться."
-	return a.searchWebInput(ctx, input, "low", 400, nil)
+	input := "Найди в интернете актуальные цены по запросу: " + trip + ". Проверь билеты и тарифы на Яндекс Путешествиях, Aviasales, Tutu, Rasp, сайте РЖД и официальном сайте авиакомпании «Победа» https://ticket.flypobeda.ru/websky/. Ответь по-русски кратко, максимум тремя вариантами: перевозчик, цена и валюта, время отправления — только если это найдено в источнике. Отличай цену «от» от точной. Если цены не найдены, прямо скажи. Не выдумывай стоимость, расписание или наличие мест; покупку не оформляй. Укажи названия источников и предупреди, что цена может измениться."
+	return a.searchWebInput(ctx, input, "low", 8000, nil)
 }
 
 func (a *api) searchWebInput(ctx context.Context, input, contextSize string, maxOutputTokens int, allowedDomains []string) ([]byte, error) {
@@ -184,6 +184,9 @@ func (a *api) searchWebInput(ctx context.Context, input, contextSize string, max
 		"input":             input,
 		"tools":             []any{webSearchTool},
 		"include":           []string{"web_search_call.action.sources"},
+	}
+	if maxOutputTokens > 400 && strings.HasPrefix(a.model, "gpt-5") {
+		body["reasoning"] = map[string]any{"effort": "low"}
 	}
 	data, err := a.post(searchCtx, "/responses", body, 2<<20)
 	if err != nil {
