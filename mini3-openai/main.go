@@ -19,12 +19,13 @@ import (
 )
 
 const muteFile = "/tmp/mini3-openai-mute"
-type api struct { key, model, voice, base string; client *http.Client }
+type api struct { key, model, voice, base string; client *http.Client; ttsModel, wakeWord string }
 func env(k, fallback string) string { if v:=os.Getenv(k); v!="" { return v }; return fallback }
 func newAPI() (*api,error) {
+ c,err:=currentModelConfig();if err!=nil{return nil,err}
  b,err:=os.ReadFile(env("OPENAI_KEY_FILE","/data/opt/openai/key.txt")); if err!=nil {return nil,fmt.Errorf("read API key: %w",err)}
  key:=strings.TrimSpace(strings.TrimPrefix(string(b),"\ufeff")); if !strings.HasPrefix(key,"sk-") || strings.ContainsAny(key,"\r\n\t ") {return nil,errors.New("invalid API key file")}
- return &api{key,env("OPENAI_MODEL","gpt-4.1-mini"),env("OPENAI_VOICE","coral"),"https://api.openai.com/v1",&http.Client{Timeout:60*time.Second,CheckRedirect:func(r *http.Request,via []*http.Request) error{return errors.New("API redirect refused")}}},nil
+ return &api{key:key,model:c.Model,voice:c.Voice,ttsModel:c.TTSModel,wakeWord:c.WakeWord,base:"https://api.openai.com/v1",client:&http.Client{Timeout:60*time.Second,CheckRedirect:func(r *http.Request,via []*http.Request) error{return errors.New("API redirect refused")}}},nil
 }
 func (a *api) post(ctx context.Context,path string,body any,limit int64) ([]byte,error) {
  b,err:=json.Marshal(body); if err!=nil{return nil,err}
@@ -67,7 +68,7 @@ func (a *api) say(ctx context.Context,text string)error{
 }
 func (a *api) sayWithIndicator(ctx context.Context,text string,playing func())error{
  if len([]rune(text))>2000{return errors.New("speech text too long")}
- data,err:=a.post(ctx,"/audio/speech",map[string]any{"model":"gpt-4o-mini-tts","voice":a.voice,"input":text,"instructions":"Говори по-русски, естественно и ясно, в умеренном темпе.","response_format":"pcm"},4<<20)
+ data,err:=a.post(ctx,"/audio/speech",a.speechBody(text),4<<20)
  if err!=nil{return err}; stereo,err:=pcm48(data);if err!=nil{return err}
  cmd:=exec.CommandContext(ctx,"/usr/bin/aplay","-q","-D","speakers","-t","raw","-f","S16_LE","-r","48000","-c","2")
  cmd.Stdin=bytes.NewReader(stereo);cmd.Stderr=os.Stderr
@@ -81,7 +82,8 @@ func (a *api) listen(ctx context.Context)error{
  hardware:=startHardware(ctx);defer hardware.close()
  _=os.Remove(muteFile)
  cmd:=exec.Command("/data/opt/bin/vosk-stream","/data/opt/vosk/model-ru")
- wake:=strings.ToLower(strings.TrimSpace(env("OPENAI_WAKE_WORD","компьютер")))
+ wake:=a.wakeWord
+ if wake==""{wake="компьютер"}
  grammar,_:=json.Marshal([]string{wake,"[unk]"})
  cmd.Env=append(os.Environ(),"VOSK_MUTE_FILE="+muteFile,"VOSK_WAKE_WORD="+wake,"VOSK_WAKE_GRAMMAR="+string(grammar))
  stdout,err:=cmd.StdoutPipe();if err!=nil{return err};cmd.Stderr=os.Stderr
@@ -134,7 +136,11 @@ func (a *api) listen(ctx context.Context)error{
 }
 func main(){
  ctx,cancel:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM);defer cancel()
- if len(os.Args)<2{fmt.Fprintln(os.Stderr,"Usage: mini3-openai ask|say|talk <text> | listen");os.Exit(2)}
+ if len(os.Args)<2{fmt.Fprintln(os.Stderr,"Usage: mini3-openai ask|say|talk <text> | listen | config");os.Exit(2)}
+ if os.Args[1]=="config"{
+  c,e:=currentModelConfig();if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
+  _=json.NewEncoder(os.Stdout).Encode(c);return
+ }
  a,err:=newAPI();if err==nil{
   mode:=os.Args[1];text:=strings.Join(os.Args[2:]," ")
   if mode!="listen" && text==""{err=errors.New("text required")}else{switch mode{
