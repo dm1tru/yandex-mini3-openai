@@ -28,6 +28,7 @@ static double began;
 static short preroll[RATE*2];
 static unsigned pre_count;
 static const char *wake, *grammar;
+static int emit_audio;
 static VoskRecognizer *replace_rec(VoskRecognizer *old,VoskModel *model,int full) {
     if(old) vosk_recognizer_free(old);
     malloc_trim(0);
@@ -114,11 +115,28 @@ static void emit(const char *type,const char *json,double lag) {
     for(const char *p=json;*p;p++) if(*p!='\n' && *p!='\r') putchar(*p);
     puts("}");
 }
+static void emit_audio_chunk(const short *samples,unsigned n) {
+    static const char alphabet[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    if(!emit_audio || !n) return;
+    bound_log();
+    fputs("{\"event\":\"audio\",\"pcm\":\"",stdout);
+    unsigned char bytes[BLOCK*2];
+    for(unsigned i=0;i<n;i++) { bytes[i*2]=(unsigned char)samples[i]; bytes[i*2+1]=(unsigned char)((unsigned short)samples[i]>>8); }
+    unsigned len=n*2;
+    for(unsigned i=0;i<len;i+=3) {
+        unsigned a=bytes[i], b=i+1<len?bytes[i+1]:0, c=i+2<len?bytes[i+2]:0;
+        putchar(alphabet[a>>2]); putchar(alphabet[((a&3)<<4)|(b>>4)]);
+        putchar(i+1<len?alphabet[((b&15)<<2)|(c>>6)]:'=');
+        putchar(i+2<len?alphabet[c&63]:'=');
+    }
+    puts("\"}");
+}
 int main(int argc,char **argv) {
     if(argc!=2 && argc!=3) { fprintf(stderr,"Usage: vosk-stream MODEL [16k-mono-s16le.pcm]\n"); return 2; }
     setvbuf(stdout,NULL,_IOLBF,0);
     signal(SIGINT,stop); signal(SIGTERM,stop);
     replay=argc==3; began=now();
+    emit_audio=getenv("VOSK_EMIT_AUDIO") && !strcmp(getenv("VOSK_EMIT_AUDIO"),"1");
     vosk_set_log_level(-1);
     VoskModel *model=vosk_model_new(argv[1]);
     if(!model) return 1;
@@ -176,6 +194,7 @@ int main(int argc,char **argv) {
             was_muted=muted;
             continue;
         }
+        emit_audio_chunk(samples,n);
         double t=now();
         if(grammar && !full) {
             if(pre_count+n>RATE*2) {

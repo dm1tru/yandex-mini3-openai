@@ -14,13 +14,14 @@ import (
 const defaultConfigPath = "/data/opt/openai/config.json"
 type modelConfig struct {
  Model string `json:"model"`
+ RealtimeModel string `json:"realtime_model"`
  TTSModel string `json:"tts_model"`
  Voice string `json:"voice"`
  WakeWord string `json:"wake_word"`
 }
 
 func loadModelConfig(path string, optional bool, getenv func(string) string) (modelConfig,error) {
- c:=modelConfig{"gpt-4.1-mini","gpt-4o-mini-tts","coral","компьютер"}
+ c:=modelConfig{"gpt-4.1-mini","gpt-realtime-2.1","gpt-4o-mini-tts","coral","компьютер"}
  b,err:=os.ReadFile(path)
  if err!=nil && !(optional && errors.Is(err,os.ErrNotExist)){return c,fmt.Errorf("read model config: %w",err)}
  if err==nil {
@@ -33,7 +34,7 @@ func loadModelConfig(path string, optional bool, getenv func(string) string) (mo
   var extra any
   if d.Decode(&extra)!=io.EOF{return c,errors.New("unexpected data after model config")}
  }
- for _,v:=range []struct{key string; dst *string}{{"OPENAI_MODEL",&c.Model},{"OPENAI_TTS_MODEL",&c.TTSModel},{"OPENAI_VOICE",&c.Voice},{"OPENAI_WAKE_WORD",&c.WakeWord}} {
+ for _,v:=range []struct{key string; dst *string}{{"OPENAI_MODEL",&c.Model},{"OPENAI_REALTIME_MODEL",&c.RealtimeModel},{"OPENAI_TTS_MODEL",&c.TTSModel},{"OPENAI_VOICE",&c.Voice},{"OPENAI_WAKE_WORD",&c.WakeWord}} {
   if s:=getenv(v.key);s!=""{*v.dst=s}
   *v.dst=strings.TrimSpace(*v.dst)
   if *v.dst=="" || strings.ContainsAny(*v.dst,"\r\n\t "){return c,fmt.Errorf("invalid value for %s",v.key)}

@@ -19,13 +19,13 @@ import (
 )
 
 const muteFile = "/tmp/mini3-openai-mute"
-type api struct { key, model, voice, base string; client *http.Client; ttsModel, wakeWord string }
+type api struct { key, model, voice, base string; client *http.Client; ttsModel, wakeWord, realtimeModel string }
 func env(k, fallback string) string { if v:=os.Getenv(k); v!="" { return v }; return fallback }
 func newAPI() (*api,error) {
  c,err:=currentModelConfig();if err!=nil{return nil,err}
  b,err:=os.ReadFile(env("OPENAI_KEY_FILE","/data/opt/openai/key.txt")); if err!=nil {return nil,fmt.Errorf("read API key: %w",err)}
  key:=strings.TrimSpace(strings.TrimPrefix(string(b),"\ufeff")); if !strings.HasPrefix(key,"sk-") || strings.ContainsAny(key,"\r\n\t ") {return nil,errors.New("invalid API key file")}
- return &api{key:key,model:c.Model,voice:c.Voice,ttsModel:c.TTSModel,wakeWord:c.WakeWord,base:"https://api.openai.com/v1",client:&http.Client{Timeout:60*time.Second,CheckRedirect:func(r *http.Request,via []*http.Request) error{return errors.New("API redirect refused")}}},nil
+ return &api{key:key,model:c.Model,voice:c.Voice,ttsModel:c.TTSModel,wakeWord:c.WakeWord,realtimeModel:c.RealtimeModel,base:"https://api.openai.com/v1",client:&http.Client{Timeout:60*time.Second,CheckRedirect:func(r *http.Request,via []*http.Request) error{return errors.New("API redirect refused")}}},nil
 }
 func (a *api) post(ctx context.Context,path string,body any,limit int64) ([]byte,error) {
  b,err:=json.Marshal(body); if err!=nil{return nil,err}
@@ -136,7 +136,7 @@ func (a *api) listen(ctx context.Context)error{
 }
 func main(){
  ctx,cancel:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM);defer cancel()
- if len(os.Args)<2{fmt.Fprintln(os.Stderr,"Usage: mini3-openai ask|say|talk <text> | listen | config");os.Exit(2)}
+ if len(os.Args)<2{fmt.Fprintln(os.Stderr,"Usage: mini3-openai ask|say|talk <text> | listen (Realtime) | config");os.Exit(2)}
  if os.Args[1]=="config"{
   c,e:=currentModelConfig();if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
   _=json.NewEncoder(os.Stdout).Encode(c);return
@@ -147,7 +147,7 @@ func main(){
    case "ask":var reply string;reply,err=a.ask(ctx,text);if err==nil{fmt.Println(reply)}
    case "say":err=a.say(ctx,text)
    case "talk":var reply string;reply,err=a.ask(ctx,text);if err==nil{fmt.Println(reply);err=a.say(ctx,reply)}
-   case "listen":err=a.listen(ctx)
+   case "listen":err=a.listenRealtime(ctx)
    default:err=errors.New("unknown command")
   }}
  }
