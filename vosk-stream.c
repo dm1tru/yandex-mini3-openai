@@ -10,6 +10,7 @@
 #include <math.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <malloc.h>
 #include "vosk_api.h"
 
 #define RATE 16000
@@ -24,6 +25,21 @@ static pthread_cond_t available=PTHREAD_COND_INITIALIZER;
 static FILE *input;
 static int replay;
 static double began;
+static short preroll[RATE*2];
+static unsigned pre_count;
+static const char *wake, *grammar;
+static VoskRecognizer *replace_rec(VoskRecognizer *old,VoskModel *model,int full) {
+    if(old) vosk_recognizer_free(old);
+    malloc_trim(0);
+    return grammar && !full ? vosk_recognizer_new_grm(model,RATE,grammar) : vosk_recognizer_new(model,RATE);
+}
+static int only_wake(const char *json) {
+    const char *p=strchr(json,':');
+    if(!p || !(p=strchr(p,'"'))) return 0;
+    p++;
+    return wake && !strncmp(p,wake,strlen(wake)) && p[strlen(wake)]=='"';
+}
+static void mode_event(int full) { printf("{\"event\":\"mode\",\"mode\":\"%s\"}\n",full?"listening":"wake"); }
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+t.tv_nsec/1e9; }
 static void stop(int sig) { (void)sig; stopping=1; }
 static void bound_log(void) {
@@ -106,7 +122,10 @@ int main(int argc,char **argv) {
     vosk_set_log_level(-1);
     VoskModel *model=vosk_model_new(argv[1]);
     if(!model) return 1;
-    VoskRecognizer *rec=vosk_recognizer_new(model,RATE);
+    wake=getenv("VOSK_WAKE_WORD"); grammar=getenv("VOSK_WAKE_GRAMMAR");
+    if(!wake || !*wake || !grammar || !*grammar) { wake=NULL; grammar=NULL; }
+    int full=grammar?0:1;
+    VoskRecognizer *rec=replace_rec(NULL,model,full);
     if(!rec) { vosk_model_free(model); return 1; }
     pid_t child=-1;
     if(replay) input=fopen(argv[2],"rb");
@@ -126,8 +145,10 @@ int main(int argc,char **argv) {
     pthread_t thread;
     if(pthread_create(&thread,NULL,capture,NULL)) { if(child>0) kill(child,SIGTERM); return 1; }
     printf("{\"event\":\"ready\",\"model_load_s\":%.2f,\"warmup_s\":%d}\n",now()-began,replay?0:1);
+    mode_event(full);
     short samples[BLOCK]; double work=0,audio=0,last_report=now(),last_partial=0;
     double utterance_audio=0;
+    unsigned wake_hits=0;
     const char *mute_path=getenv("VOSK_MUTE_FILE"); int was_muted=0;
     char previous[8192]="";
     while(!stopping) {
@@ -146,19 +167,51 @@ int main(int argc,char **argv) {
         if(!n) { if(done) break; else continue; }
         int muted=mute_path && access(mute_path,F_OK)==0;
         if(muted || was_muted) {
-            if(muted!=was_muted) { vosk_recognizer_reset(rec); previous[0]=0; utterance_audio=0; }
+            if(muted!=was_muted) {
+                full=grammar?0:1; rec=replace_rec(rec,model,full);
+                if(!rec) { failed=1; break; }
+                previous[0]=0; utterance_audio=0; pre_count=0; wake_hits=0; mode_event(full);
+            }
             pthread_mutex_lock(&mutex); head=0; count=0; pthread_mutex_unlock(&mutex);
             was_muted=muted;
             continue;
         }
         double t=now();
+        if(grammar && !full) {
+            if(pre_count+n>RATE*2) {
+                unsigned drop=pre_count+n-RATE*2;
+                memmove(preroll,preroll+drop,(pre_count-drop)*sizeof(short)); pre_count-=drop;
+            }
+            memcpy(preroll+pre_count,samples,n*sizeof(short)); pre_count+=n;
+        }
         int result=vosk_recognizer_accept_waveform_s(rec,samples,n);
         work+=now()-t; audio+=(double)n/RATE;
         utterance_audio+=(double)n/RATE;
         if(result<0) { pthread_mutex_lock(&mutex); failed=1; pthread_mutex_unlock(&mutex); break; }
-        if(result || utterance_audio>=15) {
-            emit("final",result?vosk_recognizer_result(rec):vosk_recognizer_final_result(rec),lag);
-            vosk_recognizer_reset(rec); previous[0]=0; utterance_audio=0;
+        if(grammar && !full) {
+            const char *hyp=result?vosk_recognizer_result(rec):vosk_recognizer_partial_result(rec);
+            wake_hits=only_wake(hyp)?wake_hits+1:0;
+            if(wake_hits>=3) {
+                full=1; mode_event(full); rec=replace_rec(rec,model,1);
+                if(!rec) { failed=1; break; }
+                if(vosk_recognizer_accept_waveform_s(rec,preroll,pre_count)<0) { failed=1; break; }
+                utterance_audio=0; pre_count=0; previous[0]=0; wake_hits=0;
+            } else if(utterance_audio>=10) {
+                rec=replace_rec(rec,model,0);
+                if(!rec) { failed=1; break; }
+                /* Retain word boundaries across periodic decoder recreation. */
+                unsigned keep=pre_count<RATE/2?pre_count:RATE/2;
+                if(vosk_recognizer_accept_waveform_s(rec,preroll+pre_count-keep,keep)<0) { failed=1; break; }
+                utterance_audio=0; wake_hits=0;
+            }
+        } else if(result || utterance_audio>=15) {
+            const char *hyp=result?vosk_recognizer_result(rec):vosk_recognizer_final_result(rec);
+            int standalone=only_wake(hyp) && utterance_audio<15;
+            emit("final",hyp,lag);
+            full=(!grammar || standalone)?1:0;
+            rec=replace_rec(rec,model,full);
+            if(!rec) { failed=1; break; }
+            previous[0]=0; utterance_audio=0; pre_count=0; wake_hits=0; mode_event(full);
         }
         else if(now()-last_partial>=0.5) {
             const char *partial=vosk_recognizer_partial_result(rec);
@@ -177,7 +230,7 @@ int main(int argc,char **argv) {
     int child_status=0;
     if(child>0) { waitpid(child,&child_status,0); if(WIFEXITED(child_status) && WEXITSTATUS(child_status)!=0) failed=1; }
     if(overflow) fprintf(stderr,"Audio backlog exceeded 30s; stopping instead of silently dropping speech.\n");
-    if(!failed) emit("final",vosk_recognizer_final_result(rec),0);
+    /* Shutdown must not turn a partial recording into a new API request. */
     printf("{\"event\":\"stopped\",\"audio_s\":%.1f,\"compute_ratio\":%.2f,\"error\":%s}\n",audio,audio?work/audio:0,failed?"true":"false");
     vosk_recognizer_free(rec); vosk_model_free(model);
     return failed?1:0;

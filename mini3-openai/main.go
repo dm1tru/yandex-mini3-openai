@@ -63,47 +63,68 @@ func pcm48(pcm []byte)([]byte,error){
  return out,nil
 }
 func (a *api) say(ctx context.Context,text string)error{
+ return a.sayWithIndicator(ctx,text,nil)
+}
+func (a *api) sayWithIndicator(ctx context.Context,text string,playing func())error{
  if len([]rune(text))>2000{return errors.New("speech text too long")}
  data,err:=a.post(ctx,"/audio/speech",map[string]any{"model":"gpt-4o-mini-tts","voice":a.voice,"input":text,"instructions":"Говори по-русски, естественно и ясно, в умеренном темпе.","response_format":"pcm"},4<<20)
  if err!=nil{return err}; stereo,err:=pcm48(data);if err!=nil{return err}
  cmd:=exec.CommandContext(ctx,"/usr/bin/aplay","-q","-D","speakers","-t","raw","-f","S16_LE","-r","48000","-c","2")
  cmd.Stdin=bytes.NewReader(stereo);cmd.Stderr=os.Stderr
+ if playing!=nil{playing()}
  return cmd.Run()
 }
 func wakeQuestion(text,wake string)(string,bool){
  words:=strings.Fields(strings.ToLower(text));for i,w:=range words{if strings.Trim(w,",.!?:;")==wake{return strings.Join(words[i+1:]," "),true}};return "",false
 }
 func (a *api) listen(ctx context.Context)error{
+ hardware:=startHardware(ctx);defer hardware.close()
  _=os.Remove(muteFile)
  cmd:=exec.Command("/data/opt/bin/vosk-stream","/data/opt/vosk/model-ru")
- cmd.Env=append(os.Environ(),"VOSK_MUTE_FILE="+muteFile)
+ wake:=strings.ToLower(strings.TrimSpace(env("OPENAI_WAKE_WORD","компьютер")))
+ grammar,_:=json.Marshal([]string{wake,"[unk]"})
+ cmd.Env=append(os.Environ(),"VOSK_MUTE_FILE="+muteFile,"VOSK_WAKE_WORD="+wake,"VOSK_WAKE_GRAMMAR="+string(grammar))
  stdout,err:=cmd.StdoutPipe();if err!=nil{return err};cmd.Stderr=os.Stderr
  if err=cmd.Start();err!=nil{return err}
  done:=make(chan struct{});go func(){select{case <-ctx.Done():_ =cmd.Process.Signal(syscall.SIGTERM);case <-done:}}()
  defer close(done);defer os.Remove(muteFile)
- wake:=env("OPENAI_WAKE_WORD","компьютер");fmt.Printf("Say: %s, <question>. Voice is AI-generated.\n",wake)
+ fmt.Printf("Say: %s, <question>. Voice is AI-generated.\n",wake)
  scanner:=bufio.NewScanner(stdout);scanner.Buffer(make([]byte,4096),64<<10)
  var armed time.Time;var last time.Time;var calls []time.Time
  for scanner.Scan(){
   if st,e:=os.Stdout.Stat();e==nil && st.Mode().IsRegular() && st.Size()>1<<20{_ =os.Stdout.Truncate(0);_,_=os.Stdout.Seek(0,0)}
-  var event struct{Event string `json:"event"`;Result struct{Text string `json:"text"`} `json:"result"`}
+  var event struct{Event string `json:"event"`;Mode string `json:"mode"`;Result struct{Text string `json:"text"`;Partial string `json:"partial"`} `json:"result"`}
   if json.Unmarshal(scanner.Bytes(),&event)!=nil{continue}
-  if event.Event=="ready" || event.Event=="stats"{fmt.Println(scanner.Text());continue}
+  if event.Event=="ready"{hardware.set("idle",0);fmt.Println(scanner.Text());continue}
+  if event.Event=="stats"{fmt.Println(scanner.Text());continue}
+  if event.Event=="mode"{
+   fmt.Println(scanner.Text())
+   // A small grammar can mishear background speech as the wake word.
+   // Arm API requests only after the full recognizer confirms it below.
+   if event.Mode=="listening" && time.Since(last)>=3*time.Second{hardware.set("listening",20*time.Second)}
+   if event.Mode=="wake"{armed=time.Time{};hardware.set("idle",0)}
+   continue
+  }
+  if event.Event=="partial"{
+   if _,found:=wakeQuestion(event.Result.Partial,wake);found && time.Since(last)>=3*time.Second{hardware.set("listening",12*time.Second)}
+   continue
+  }
   if event.Event!="final"{continue}
   text:=strings.TrimSpace(event.Result.Text);if text==""{continue}
   q,found:=wakeQuestion(text,wake)
-  if found && q==""{armed=time.Now().Add(10*time.Second);fmt.Println("Listening for question (10 seconds)");continue}
+  if found && q==""{armed=time.Now().Add(10*time.Second);hardware.set("listening",10*time.Second);fmt.Println("Listening for question (10 seconds)");continue}
   if !found{if time.Now().After(armed){continue};q=text}
   armed=time.Time{}
   if time.Since(last)<3*time.Second{continue}
   recent:=calls[:0];for _,t:=range calls{if time.Since(t)<time.Minute{recent=append(recent,t)}};calls=recent
   if len(calls)>=6{fmt.Fprintln(os.Stderr,"Rate limit: six questions per minute");continue}
   if err=os.WriteFile(muteFile,[]byte("busy\n"),0600);err!=nil{return err}
+  hardware.set("thinking",0)
   // Capture continues but STT discards sound during requests/playback.
   fmt.Println("Question:",q);calls=append(calls,time.Now())
   answer,e:=a.ask(ctx,q)
-  if e==nil{fmt.Println("Answer:",answer);e=a.say(ctx,answer)}
-  if e!=nil{fmt.Fprintln(os.Stderr,"Request failed:",e)}
+  if e==nil{fmt.Println("Answer:",answer);e=a.sayWithIndicator(ctx,answer,func(){hardware.set("speaking",0)})}
+  if e!=nil{hardware.set("error",2*time.Second);fmt.Fprintln(os.Stderr,"Request failed:",e)}else{hardware.set("idle",0)}
   timer:=time.NewTimer(700*time.Millisecond);select{case <-timer.C:case <-ctx.Done():timer.Stop()}
   _=os.Remove(muteFile);last=time.Now()
   if ctx.Err()!=nil{break}

@@ -18,7 +18,7 @@ start)
     [ ! -d /tmp/mini3-vosk-test.lock ] || { echo 'Stop vosk-test first.' >&2; exit 1; }
     if [ -f "$LOG" ]; then mv "$LOG" "$LOG.previous"; fi
     nohup "$SELF" run >"$LOG" 2>&1 </dev/null &
-    echo 'Starting Vosk. Watch: tail -f /tmp/vosk-live.log'
+    echo 'Starting Vosk. Watch: tail -F /tmp/vosk-live.log'
     ;;
 run)
     mkdir "$RUN" || exit 1
