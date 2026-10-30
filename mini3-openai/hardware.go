@@ -42,6 +42,7 @@ func disableTrigger(path string)string{
 }
 type hardware struct {
  mu sync.Mutex
+ mixerMu sync.Mutex
  state string
  until time.Time
  conversationMode bool
@@ -53,6 +54,32 @@ type hardware struct {
  cancel context.CancelFunc
  wg sync.WaitGroup
  syncPath,syncTrigger string
+}
+
+func(h *hardware)amixer(ctx context.Context,args ...string)(string,error){
+ callCtx,cancel:=context.WithTimeout(ctx,2*time.Second);defer cancel()
+ out,err:=exec.CommandContext(callCtx,"amixer",args...).CombinedOutput()
+ if err!=nil{return string(out),fmt.Errorf("amixer failed: %w",err)}
+ return string(out),nil
+}
+func(h *hardware)recordVolume(level int){
+ h.mu.Lock();h.volume=level;h.volumeUntil=time.Now().Add(time.Second);h.displayUntil=time.Now().Add(2*time.Second);h.mu.Unlock()
+ fmt.Fprintf(os.Stderr,"Volume: %d%%\n",level)
+}
+func(h *hardware)setMasterVolume(ctx context.Context,level int)(int,error){
+ if level<0||level>100{return 0,errors.New("volume must be between 0 and 100 percent")}
+ h.mixerMu.Lock();defer h.mixerMu.Unlock()
+ out,err:=h.amixer(ctx,"sset","Master",fmt.Sprintf("%d%%",level));if err!=nil{return 0,err}
+ actual,err:=mixerPercent(out);if err!=nil{return 0,err};h.recordVolume(actual);return actual,nil
+}
+func(h *hardware)adjustMasterVolume(ctx context.Context,delta int)(int,error){
+ if delta==0||delta < -20||delta>20{return 0,errors.New("volume adjustment must be between -20 and 20 percentage points")}
+ h.mixerMu.Lock();defer h.mixerMu.Unlock()
+ out,err:=h.amixer(ctx,"sget","Master");if err!=nil{return 0,err}
+ current,err:=mixerPercent(out);if err!=nil{return 0,err}
+ level:=current+delta;if level<0{level=0};if level>100{level=100}
+ out,err=h.amixer(ctx,"sset","Master",fmt.Sprintf("%d%%",level));if err!=nil{return 0,err}
+ actual,err:=mixerPercent(out);if err!=nil{return 0,err};h.recordVolume(actual);return actual,nil
 }
 
 func startHardware(parent context.Context)*hardware{
@@ -151,13 +178,10 @@ func(h *hardware)buttons(ctx context.Context){
    delta:=volumeDelta(buf[off:off+24]);if delta==0{continue}
    repeat:=binary.LittleEndian.Uint32(buf[off+20:])==2
    if repeat && time.Since(last)<150*time.Millisecond{continue}
-   value:="5%+";if delta<0{value="5%-"}
-   callCtx,cancel:=context.WithTimeout(ctx,2*time.Second)
-   out,e:=exec.CommandContext(callCtx,"amixer","sset","Master",value).CombinedOutput();cancel()
-   if e!=nil{fmt.Fprintln(os.Stderr,"Volume change failed:",e);continue}
-   level,e:=mixerPercent(string(out));if e!=nil{fmt.Fprintln(os.Stderr,e);continue}
-   h.mu.Lock();h.volume=level;h.volumeUntil=time.Now().Add(time.Second);h.displayUntil=time.Now().Add(2*time.Second);h.mu.Unlock()
-   fmt.Fprintf(os.Stderr,"Volume: %d%%\n",level);last=time.Now()
+			callCtx,cancel:=context.WithTimeout(ctx,2*time.Second)
+			_,e:=h.adjustMasterVolume(callCtx,delta);cancel()
+			if e!=nil{fmt.Fprintln(os.Stderr,"Volume change failed:",e);continue}
+			last=time.Now()
   }
  }}
 }

@@ -25,10 +25,57 @@ type webSearchToolOutput struct {
 	Error   string              `json:"error,omitempty"`
 }
 
-func (a *api) runRealtimeFunction(ctx context.Context, name, arguments string) ([]byte, error) {
-	if name != "web_search" {
+func (a *api) runRealtimeFunction(ctx context.Context, name, arguments string, h *hardware) ([]byte, error) {
+	switch name {
+	case "set_volume":
+		var args struct {
+			Percent *int `json:"percent"`
+		}
+		if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+			return nil, errors.New("invalid volume arguments")
+		}
+		if args.Percent == nil {
+			return nil, errors.New("volume percent is required")
+		}
+		level, err := h.setMasterVolume(ctx, *args.Percent)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"status": "ok", "volume_percent": level})
+	case "adjust_volume":
+		var args struct {
+			Direction string `json:"direction"`
+			Steps     int    `json:"steps"`
+		}
+		if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+			return nil, errors.New("invalid volume adjustment arguments")
+		}
+		steps := args.Steps
+		if steps == 0 {
+			steps = 1
+		}
+		if steps < 1 || steps > 4 {
+			return nil, errors.New("volume adjustment steps must be between 1 and 4")
+		}
+		delta := 5 * steps
+		if args.Direction == "down" {
+			delta = -delta
+		} else if args.Direction != "up" {
+			return nil, errors.New("volume adjustment direction must be up or down")
+		}
+		level, err := h.adjustMasterVolume(ctx, delta)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"status": "ok", "volume_percent": level})
+	case "web_search":
+		return a.searchWeb(ctx, arguments)
+	default:
 		return nil, fmt.Errorf("unsupported tool: %s", name)
 	}
+}
+
+func (a *api) searchWeb(ctx context.Context, arguments string) ([]byte, error) {
 	var args realtimeSearchArguments
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return nil, errors.New("invalid web search arguments")

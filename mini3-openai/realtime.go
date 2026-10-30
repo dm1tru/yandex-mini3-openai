@@ -22,7 +22,11 @@ import (
 	"time"
 )
 
-const realtimeInstruction = "Ты — голосовой помощник в домашней колонке. Отвечай по-русски и кратко, обычно 1–3 предложениями. Для актуальных фактов и когда пользователь просит поиск в интернете используй инструмент web_search. Отвечай по найденным источникам; по возможности называй источники, но не зачитывай URL. Если поиск завершился ошибкой, скажи об этом и не выдумывай актуальные данные."
+const realtimeInstruction = "Ты — голосовой помощник в домашней колонке. Отвечай по-русски и кратко, обычно 1–3 предложениями. Для актуальных фактов и когда пользователь просит поиск в интернете используй инструмент web_search. Отвечай по найденным источникам; по возможности называй источники, но не зачитывай URL. Если поиск завершился ошибкой, скажи об этом и не выдумывай актуальные данные. Для точной установки громкости используй set_volume, для относительной — adjust_volume; после успешного изменения назови итоговую громкость. Если инструмент сообщил об ошибке, не утверждай, что действие выполнено."
+
+func realtimeFunctionTool(name, description string, parameters map[string]any) map[string]any {
+	return map[string]any{"type": "function", "name": name, "description": description, "parameters": parameters}
+}
 
 type wsClient struct {
 	conn    net.Conn
@@ -97,17 +101,29 @@ func connectRealtime(ctx context.Context, key, model, voice string) (*wsClient, 
 	}
 	update := map[string]any{"type": "session.update", "session": map[string]any{
 		"type": "realtime", "output_modalities": []string{"audio"}, "instructions": realtimeInstruction,
-		"tools": []any{map[string]any{
-			"type": "function",
-			"name": "web_search",
-			"description": "Search the public web for current facts and answer questions that require up-to-date information.",
-			"parameters": map[string]any{
+		"tools": []any{
+			realtimeFunctionTool("web_search", "Search the public web for current facts and answer questions that require up-to-date information.", map[string]any{
 				"type": "object",
 				"properties": map[string]any{"query": map[string]any{"type": "string", "description": "Concise search query with relevant context."}},
 				"required": []string{"query"},
 				"additionalProperties": false,
-			},
-		}},
+			}),
+			realtimeFunctionTool("set_volume", "Set the speaker Master volume to an exact percentage.", map[string]any{
+				"type": "object",
+				"properties": map[string]any{"percent": map[string]any{"type": "integer", "minimum": 0, "maximum": 100, "description": "Target speaker volume in percent."}},
+				"required": []string{"percent"},
+				"additionalProperties": false,
+			}),
+			realtimeFunctionTool("adjust_volume", "Raise or lower speaker Master volume by 5 percentage points per step.", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"direction": map[string]any{"type": "string", "enum": []string{"up", "down"}},
+					"steps": map[string]any{"type": "integer", "minimum": 1, "maximum": 4, "description": "Number of 5-point steps. Defaults to 1."},
+				},
+				"required": []string{"direction"},
+				"additionalProperties": false,
+			}),
+		},
 		"tool_choice": "auto",
 		"audio": map[string]any{
 			"input":  map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": 24000}, "turn_detection": nil, "noise_reduction": map[string]any{"type": "far_field"}},
@@ -400,7 +416,7 @@ func realtimeReceiver(ctx context.Context, w *wsClient, a *api, h *hardware, eve
 					return
 				}
 				h.set("thinking", 0)
-				output, toolErr := a.runRealtimeFunction(ctx, call.Item.Name, call.Item.Arguments)
+				output, toolErr := a.runRealtimeFunction(ctx, call.Item.Name, call.Item.Arguments, h)
 				if toolErr != nil {
 					output, _ = json.Marshal(map[string]string{"error": toolErr.Error()})
 				}
