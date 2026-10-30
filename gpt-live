@@ -56,7 +56,10 @@ run)
         [ "$n" -lt 15 ] || { echo 'Microphone is still occupied.' >&2; exit 1; }
         sleep 1
     done
-    amixer sset 'PDM Gain' 36 >/dev/null
+    mic_gain=$(/data/opt/bin/mini3-openai config | sed -n 's/.*"mic_gain":\([0-9][0-9]*\).*/\1/p')
+    case "$mic_gain" in ''|*[!0-9]*) echo 'Invalid mic_gain in OpenAI config.' >&2; exit 1;; esac
+    [ "$mic_gain" -le 48 ] || { echo 'mic_gain must be between 0 and 48.' >&2; exit 1; }
+    amixer sset 'PDM Gain' "$mic_gain" >/dev/null
     GOMEMLIMIT=24MiB GOGC=50 /data/opt/bin/mini3-openai listen &
     child=$!
     wait "$child"

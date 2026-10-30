@@ -18,10 +18,11 @@ type modelConfig struct {
  TTSModel string `json:"tts_model"`
  Voice string `json:"voice"`
  WakeWord string `json:"wake_word"`
+	MicGain int `json:"mic_gain"`
 }
 
 func loadModelConfig(path string, optional bool, getenv func(string) string) (modelConfig,error) {
- c:=modelConfig{"gpt-4.1-mini","gpt-realtime-2.1","gpt-4o-mini-tts","coral","компьютер"}
+	c:=modelConfig{Model:"gpt-4.1-mini",RealtimeModel:"gpt-realtime-2.1",TTSModel:"gpt-4o-mini-tts",Voice:"coral",WakeWord:"компьютер",MicGain:48}
  b,err:=os.ReadFile(path)
  if err!=nil && !(optional && errors.Is(err,os.ErrNotExist)){return c,fmt.Errorf("read model config: %w",err)}
  if err==nil {
@@ -41,6 +42,7 @@ func loadModelConfig(path string, optional bool, getenv func(string) string) (mo
  }
  c.WakeWord=strings.ToLower(c.WakeWord)
  for _,r:=range c.WakeWord{if !unicode.IsLetter(r){return c,errors.New("wake_word must be one word containing letters only")}}
+	if c.MicGain<0 || c.MicGain>48{return c,errors.New("mic_gain must be between 0 and 48")}
  return c,nil
 }
 func currentModelConfig()(modelConfig,error){

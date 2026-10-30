@@ -3,5 +3,6 @@
   "realtime_model": "gpt-realtime-2.1",
   "tts_model": "gpt-4o-mini-tts",
   "voice": "coral",
-  "wake_word": "компьютер"
+  "wake_word": "компьютер",
+  "mic_gain": 48
 }
