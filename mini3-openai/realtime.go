@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-const realtimeInstruction = "Ты — голосовой помощник в домашней колонке. Отвечай по-русски и кратко, обычно 1–3 предложениями. Для актуальных фактов и когда пользователь просит поиск в интернете используй инструмент web_search. Для поиска билетов уточни города отправления и назначения и дату; если не указан транспорт, ищи самолёт и поезд, если не указано число пассажиров — считай одного. Для поездки туда-обратно уточни дату возвращения. Используй search_tickets и называй только цены, найденные в источниках; уточняй, если цена ориентировочная или наличие нужно проверить у продавца. Не утверждай, что билет забронирован или куплен. Отвечай по найденным источникам; по возможности называй источники, но не зачитывай URL. Если поиск завершился ошибкой, скажи об этом и не выдумывай актуальные данные. Для точной установки громкости используй set_volume, для относительной — adjust_volume; после успешного изменения назови итоговую громкость. Если инструмент сообщил об ошибке, не утверждай, что действие выполнено."
+const realtimeInstruction = "Ты — голосовой помощник в домашней колонке. Отвечай по-русски и кратко, обычно 1–3 предложениями. Для актуальных фактов и когда пользователь просит поиск в интернете используй инструмент web_search. Если пользователь просит найти билеты или их цены, после уточнения обязательных деталей ОБЯЗАТЕЛЬНО вызови search_tickets; не отвечай на запрос о тарифах без этого инструмента и не подменяй его общим web_search. Уточни города отправления и назначения и дату; если не указан транспорт, ищи самолёт и поезд, если не указано число пассажиров — считай одного. Для поездки туда-обратно уточни дату возвращения. Называй только цены, найденные в источниках; уточняй, если цена ориентировочная или наличие нужно проверить у продавца. Не утверждай, что билет забронирован или куплен. Отвечай по найденным источникам; по возможности называй источники, но не зачитывай URL. Если поиск завершился ошибкой, скажи об этом и не выдумывай актуальные данные. Для точной установки громкости используй set_volume, для относительной — adjust_volume; после успешного изменения назови итоговую громкость. Если инструмент сообщил об ошибке, не утверждай, что действие выполнено."
 
 func realtimeFunctionTool(name, description string, parameters map[string]any) map[string]any {
 	return map[string]any{"type": "function", "name": name, "description": description, "parameters": parameters}
@@ -429,9 +429,14 @@ func realtimeReceiver(ctx context.Context, w *wsClient, a *api, h *hardware, eve
 					return
 				}
 				h.set("thinking", 0)
+				fmt.Fprintf(os.Stderr, "Realtime tool called: %s\n", call.Item.Name)
+				toolStarted := time.Now()
 				output, toolErr := a.runRealtimeFunction(ctx, call.Item.Name, call.Item.Arguments, h)
 				if toolErr != nil {
+					fmt.Fprintf(os.Stderr, "Realtime tool failed (%s, %s): %v\n", call.Item.Name, time.Since(toolStarted).Round(time.Millisecond), toolErr)
 					output, _ = json.Marshal(map[string]string{"error": toolErr.Error()})
+				} else {
+					fmt.Fprintf(os.Stderr, "Realtime tool completed: %s (%s)\n", call.Item.Name, time.Since(toolStarted).Round(time.Millisecond))
 				}
 				if e := w.sendJSON(map[string]any{"type": "conversation.item.create", "item": map[string]any{
 					"type": "function_call_output", "call_id": call.Item.CallID, "output": string(output),

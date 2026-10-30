@@ -89,7 +89,7 @@ func (a *api) searchWeb(ctx context.Context, arguments string) ([]byte, error) {
 	}
 
 	input := "Найди в интернете актуальную информацию по запросу: " + query + ". Ответь по-русски кратко и только на основе найденных источников."
-	return a.searchWebInput(ctx, input, "low")
+	return a.searchWebInput(ctx, input, "low", 400, nil)
 }
 
 type ticketSearchArguments struct {
@@ -166,19 +166,23 @@ func (a *api) searchTickets(ctx context.Context, arguments string) ([]byte, erro
 		}
 		trip += ", обратно " + returnDate.Format("2006-01-02")
 	}
-	input := "Найди в интернете актуальные предложения на билеты: " + trip + ". Ищи публичные предложения авиакомпаний, железнодорожных перевозчиков и известных продавцов. Ответь по-русски кратко, максимум тремя вариантами. Для каждого назови перевозчика или продавца, цену и валюту, а также время отправления и багаж, только если эти сведения найдены в источнике. Не выдумывай тарифы, расписание или наличие мест; если цена не опубликована, прямо скажи об этом. Отличай точную цену от цены «от». Укажи названия источников. Это поиск, не бронирование; предупреди, что цена и наличие могут измениться."
-	return a.searchWebInput(ctx, input, "medium")
+	input := "Найди в интернете актуальные предложения на билеты: " + trip + ". Используй поиск с точными названиями городов и датой. Проверяй прежде всего цены на travel.yandex.ru и aviasales.ru для самолётов, а для поездов — travel.yandex.ru, tutu.ru, rasp.ru и rzd.ru. Ответь по-русски кратко, максимум тремя вариантами. Для каждого назови перевозчика или продавца, цену и валюту, а также время отправления и багаж, только если эти сведения найдены в источнике. Не выдумывай тарифы, расписание или наличие мест; если цена не опубликована, прямо скажи об этом. Отличай точную цену от цены «от». Укажи названия источников. Это поиск, не бронирование; предупреди, что цена и наличие могут измениться."
+	return a.searchWebInput(ctx, input, "medium", 700, []string{"travel.yandex.ru", "aviasales.ru", "tutu.ru", "rasp.ru", "rzd.ru"})
 }
 
-func (a *api) searchWebInput(ctx context.Context, input, contextSize string) ([]byte, error) {
+func (a *api) searchWebInput(ctx context.Context, input, contextSize string, maxOutputTokens int, allowedDomains []string) ([]byte, error) {
 	searchCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
+	webSearchTool := map[string]any{"type": "web_search", "search_context_size": contextSize}
+	if len(allowedDomains) > 0 {
+		webSearchTool["filters"] = map[string]any{"allowed_domains": allowedDomains}
+	}
 	body := map[string]any{
 		"model":             a.model,
 		"store":             false,
-		"max_output_tokens": 400,
+		"max_output_tokens": maxOutputTokens,
 		"input":             input,
-		"tools":             []any{map[string]any{"type": "web_search", "search_context_size": contextSize}},
+		"tools":             []any{webSearchTool},
 		"include":           []string{"web_search_call.action.sources"},
 	}
 	data, err := a.post(searchCtx, "/responses", body, 2<<20)
