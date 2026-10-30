@@ -124,7 +124,7 @@ func(h *hardware)animate(ctx context.Context){
   if !h.until.IsZero() && now.After(h.until){h.state="idle";h.until=time.Time{}}
   frame:=ringFrame(h.state,tick,h.volume,now.Before(h.volumeUntil))
   showVolume:=now.Before(h.displayUntil);level:=h.volume;conversationMode:=h.conversationMode;h.mu.Unlock()
-  if showVolume{h.display.showVolume(level)}else if conversationMode{h.display.showChat()}else{h.display.restore()}
+  if showVolume{h.display.showVolume(level)}else if conversationMode{h.display.showCall()}else{h.display.restore()}
   h.draw(frame);tick++
  }}
 }

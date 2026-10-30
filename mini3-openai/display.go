@@ -9,7 +9,7 @@ import (
 )
 
 // Clock exposes four seven-segment digits A..G, indices 0..3.
-// Seven-segment letters approximate CHAT as CHAt.
+// Seven-segment letters spell CALL during the active conversation window.
 func volumeDigits(volume int)[4]string{
  if volume<0{volume=0};if volume>100{volume=100}
  masks:=[10]string{"ABCDEF","BC","ABDEG","ABCDG","BCFG","ACDFG","ACDEFG","ABC","ABCDEFG","ABCDFG"}
@@ -17,7 +17,7 @@ func volumeDigits(volume int)[4]string{
  for i,c:=range text{if c!=' '{out[i]=masks[c-'0']}}
  return out
 }
-func chatDigits()[4]string{return [4]string{"ADEF","BCEFG","ABCEFG","CDEFG"}}
+func callDigits()[4]string{return [4]string{"ADEF","ABCEFG","DEF","DEF"}}
 type displayLED struct{path,triggerPath,trigger string;before,maximum int}
 type volumeDisplay struct{root string;active bool;pattern [4]string;leds []displayLED;syncPath,syncTrigger string}
 func readNumber(path string,fallback int)int{
@@ -26,7 +26,7 @@ func readNumber(path string,fallback int)int{
 func(d *volumeDisplay)showVolume(level int){
  d.show(volumeDigits(level))
 }
-func(d *volumeDisplay)showChat(){d.show(chatDigits())}
+func(d *volumeDisplay)showCall(){d.show(callDigits())}
 func(d *volumeDisplay)show(digits [4]string){
  if !d.active{
   paths,_:=filepath.Glob(filepath.Join(d.root,"bergamot:white:clock*","brightness"))
