@@ -9,7 +9,7 @@ import (
 )
 
 // Clock exposes four seven-segment digits A..G, indices 0..3.
-// No dedicated percent glyph: the number shown is the Master percentage.
+// Seven-segment letters approximate CHAT as CHAt.
 func volumeDigits(volume int)[4]string{
  if volume<0{volume=0};if volume>100{volume=100}
  masks:=[10]string{"ABCDEF","BC","ABDEG","ABCDG","BCFG","ACDFG","ACDEFG","ABC","ABCDEFG","ABCDFG"}
@@ -17,12 +17,17 @@ func volumeDigits(volume int)[4]string{
  for i,c:=range text{if c!=' '{out[i]=masks[c-'0']}}
  return out
 }
+func chatDigits()[4]string{return [4]string{"ADEF","BCEFG","ABCEFG","CDEFG"}}
 type displayLED struct{path,triggerPath,trigger string;before,maximum int}
-type volumeDisplay struct{root string;active bool;level int;leds []displayLED;syncPath,syncTrigger string}
+type volumeDisplay struct{root string;active bool;pattern [4]string;leds []displayLED;syncPath,syncTrigger string}
 func readNumber(path string,fallback int)int{
  b,e:=os.ReadFile(path);if e!=nil{return fallback};n,e:=strconv.Atoi(strings.TrimSpace(string(b)));if e!=nil{return fallback};return n
 }
-func(d *volumeDisplay)show(level int){
+func(d *volumeDisplay)showVolume(level int){
+ d.show(volumeDigits(level))
+}
+func(d *volumeDisplay)showChat(){d.show(chatDigits())}
+func(d *volumeDisplay)show(digits [4]string){
  if !d.active{
   paths,_:=filepath.Glob(filepath.Join(d.root,"bergamot:white:clock*","brightness"))
   if len(paths)==0{return}
@@ -33,10 +38,9 @@ func(d *volumeDisplay)show(level int){
    led.trigger=disableTrigger(trigger);d.leds=append(d.leds,led)
   }
   d.syncPath=filepath.Join(d.root,"cucumber:sync:clock-0","trigger");d.syncTrigger=disableTrigger(d.syncPath)
-  d.active=true;d.level=-1
+  d.active=true;d.pattern=[4]string{}
  }
- if d.level==level{return};d.level=level
- digits:=volumeDigits(level)
+ if d.pattern==digits{return};d.pattern=digits
  for _,led:=range d.leds{
   name:=strings.TrimPrefix(filepath.Base(filepath.Dir(led.path)),"bergamot:white:clock")
   brightness:=0

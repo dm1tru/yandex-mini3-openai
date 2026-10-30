@@ -106,6 +106,7 @@ func (a *api) listenRealtime(ctx context.Context) error {
 			active = true
 			waitingResponse = false
 			followUpUntil = time.Now().Add(followUpWindow)
+			h.setConversationMode(true)
 			if err = os.WriteFile(conversationFile, []byte("active\n"), 0600); err != nil {
 				return err
 			}
@@ -123,6 +124,7 @@ func (a *api) listenRealtime(ctx context.Context) error {
 					active = false
 					followUpUntil = time.Time{}
 					preroll = nil
+					h.setConversationMode(false)
 					_ = os.Remove(conversationFile)
 					h.set("idle", 0)
 				}
@@ -142,6 +144,7 @@ func (a *api) listenRealtime(ctx context.Context) error {
 				if ev.Mode == "listening" && !active && !waitingResponse {
 					active = true
 					followUpUntil = time.Now().Add(followUpWindow)
+					h.setConversationMode(true)
 					if e := os.WriteFile(conversationFile, []byte("active\n"), 0600); e != nil {
 						return e
 					}
@@ -195,6 +198,7 @@ func (a *api) listenRealtime(ctx context.Context) error {
 					_ = w.sendJSON(map[string]any{"type": "input_audio_buffer.clear"})
 					active = false
 					followUpUntil = time.Time{}
+					h.setConversationMode(false)
 					_ = os.Remove(conversationFile)
 					h.set("idle", 0)
 					continue

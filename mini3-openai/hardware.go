@@ -44,6 +44,7 @@ type hardware struct {
  mu sync.Mutex
  state string
  until time.Time
+ conversationMode bool
  volume int
  volumeUntil time.Time
  displayUntil time.Time
@@ -77,6 +78,10 @@ func(h *hardware)set(state string,duration time.Duration){
  if h.state!=state{fmt.Fprintln(os.Stderr,"Indicator:",state)}
  h.state=state;h.until=time.Time{}
  if duration>0{h.until=time.Now().Add(duration)}
+}
+func(h *hardware)setConversationMode(active bool){
+ h.mu.Lock();defer h.mu.Unlock()
+ h.conversationMode=active
 }
 func(h *hardware)close(){
  h.cancel();h.wg.Wait();h.draw([6][3]int{})
@@ -118,8 +123,8 @@ func(h *hardware)animate(ctx context.Context){
   h.mu.Lock()
   if !h.until.IsZero() && now.After(h.until){h.state="idle";h.until=time.Time{}}
   frame:=ringFrame(h.state,tick,h.volume,now.Before(h.volumeUntil))
-  showDisplay:=now.Before(h.displayUntil);level:=h.volume;h.mu.Unlock()
-  if showDisplay{h.display.show(level)}else{h.display.restore()}
+  showVolume:=now.Before(h.displayUntil);level:=h.volume;conversationMode:=h.conversationMode;h.mu.Unlock()
+  if showVolume{h.display.showVolume(level)}else if conversationMode{h.display.showChat()}else{h.display.restore()}
   h.draw(frame);tick++
  }}
 }
