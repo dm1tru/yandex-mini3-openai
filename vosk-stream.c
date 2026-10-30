@@ -28,6 +28,7 @@ static double began;
 static short preroll[RATE*2];
 static unsigned pre_count;
 static const char *wake, *grammar;
+static const char *conversation_path;
 static int emit_audio;
 static VoskRecognizer *replace_rec(VoskRecognizer *old,VoskModel *model,int full) {
     if(old) vosk_recognizer_free(old);
@@ -137,6 +138,7 @@ int main(int argc,char **argv) {
     signal(SIGINT,stop); signal(SIGTERM,stop);
     replay=argc==3; began=now();
     emit_audio=getenv("VOSK_EMIT_AUDIO") && !strcmp(getenv("VOSK_EMIT_AUDIO"),"1");
+    conversation_path=getenv("VOSK_CONVERSATION_FILE");
     vosk_set_log_level(-1);
     VoskModel *model=vosk_model_new(argv[1]);
     if(!model) return 1;
@@ -167,6 +169,7 @@ int main(int argc,char **argv) {
     short samples[BLOCK]; double work=0,audio=0,last_report=now(),last_partial=0;
     double utterance_audio=0;
     unsigned wake_hits=0;
+    int conversation_armed=0,conversation_started=0;
     const char *mute_path=getenv("VOSK_MUTE_FILE"); int was_muted=0;
     char previous[8192]="";
     while(!stopping) {
@@ -184,9 +187,19 @@ int main(int argc,char **argv) {
         if(bad) break;
         if(!n) { if(done) break; else continue; }
         int muted=mute_path && access(mute_path,F_OK)==0;
+        int conversation_open=conversation_path && access(conversation_path,F_OK)==0;
+        if(conversation_open) conversation_started=1;
+        if(conversation_armed && conversation_started && !conversation_open) {
+            conversation_armed=0;conversation_started=0;
+            if(grammar && full) {
+                full=0;rec=replace_rec(rec,model,full);
+                if(!rec) { failed=1; break; }
+                previous[0]=0;utterance_audio=0;pre_count=0;wake_hits=0;mode_event(full);
+            }
+        }
         if(muted || was_muted) {
             if(muted!=was_muted) {
-                full=grammar?0:1; rec=replace_rec(rec,model,full);
+                full=(grammar && !conversation_armed)?0:1; rec=replace_rec(rec,model,full);
                 if(!rec) { failed=1; break; }
                 previous[0]=0; utterance_audio=0; pre_count=0; wake_hits=0; mode_event(full);
             }
@@ -211,7 +224,7 @@ int main(int argc,char **argv) {
             const char *hyp=result?vosk_recognizer_result(rec):vosk_recognizer_partial_result(rec);
             wake_hits=only_wake(hyp)?wake_hits+1:0;
             if(wake_hits>=3) {
-                full=1; mode_event(full); rec=replace_rec(rec,model,1);
+                full=1;if(conversation_path)conversation_armed=1;mode_event(full); rec=replace_rec(rec,model,1);
                 if(!rec) { failed=1; break; }
                 if(vosk_recognizer_accept_waveform_s(rec,preroll,pre_count)<0) { failed=1; break; }
                 utterance_audio=0; pre_count=0; previous[0]=0; wake_hits=0;
@@ -227,7 +240,7 @@ int main(int argc,char **argv) {
             const char *hyp=result?vosk_recognizer_result(rec):vosk_recognizer_final_result(rec);
             int standalone=only_wake(hyp) && utterance_audio<15;
             emit("final",hyp,lag);
-            full=(!grammar || standalone)?1:0;
+            full=(!grammar || standalone || conversation_armed)?1:0;
             rec=replace_rec(rec,model,full);
             if(!rec) { failed=1; break; }
             previous[0]=0; utterance_audio=0; pre_count=0; wake_hits=0; mode_event(full);

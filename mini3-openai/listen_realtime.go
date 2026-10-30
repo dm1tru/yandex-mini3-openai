@@ -24,10 +24,14 @@ type voskEvent struct {
 	} `json:"result"`
 }
 
+const followUpWindow = 20 * time.Second
+const conversationFile = "/tmp/mini3-openai-conversation"
+
 func (a *api) listenRealtime(ctx context.Context) error {
 	h := startHardware(ctx)
 	defer h.close()
 	_ = os.Remove(muteFile)
+	_ = os.Remove(conversationFile)
 	w, err := connectRealtime(ctx, a.key, a.realtimeModel, a.voice)
 	if err != nil {
 		return err
@@ -40,7 +44,7 @@ func (a *api) listenRealtime(ctx context.Context) error {
 		wake = "компьютер"
 	}
 	grammar, _ := json.Marshal([]string{wake, "[unk]"})
-	cmd.Env = append(os.Environ(), "VOSK_MUTE_FILE="+muteFile, "VOSK_WAKE_WORD="+wake, "VOSK_WAKE_GRAMMAR="+string(grammar), "VOSK_EMIT_AUDIO=1")
+	cmd.Env = append(os.Environ(), "VOSK_MUTE_FILE="+muteFile, "VOSK_CONVERSATION_FILE="+conversationFile, "VOSK_WAKE_WORD="+wake, "VOSK_WAKE_GRAMMAR="+string(grammar), "VOSK_EMIT_AUDIO=1")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -60,6 +64,7 @@ func (a *api) listenRealtime(ctx context.Context) error {
 	}()
 	defer close(done)
 	defer os.Remove(muteFile)
+	defer os.Remove(conversationFile)
 	fmt.Printf("Realtime connected. Say: %s, <question>. Voice is AI-generated.\n", wake)
 
 	voskEvents := make(chan voskEvent, 32)
@@ -86,6 +91,7 @@ func (a *api) listenRealtime(ctx context.Context) error {
 	var preroll [][]byte
 	active := false
 	waitingResponse := false
+	var followUpUntil time.Time
 	var calls []time.Time
 	for {
 		select {
@@ -97,9 +103,13 @@ func (a *api) listenRealtime(ctx context.Context) error {
 			return fmt.Errorf("Realtime: %w", err)
 		case <-rtDone:
 			_ = os.Remove(muteFile)
-			active = false
+			active = true
 			waitingResponse = false
-			h.set("idle", 0)
+			followUpUntil = time.Now().Add(followUpWindow)
+			if err = os.WriteFile(conversationFile, []byte("active\n"), 0600); err != nil {
+				return err
+			}
+			h.set("listening", followUpWindow)
 		case ev := <-voskEvents:
 			switch ev.Event {
 			case "ready", "stats":
@@ -108,6 +118,13 @@ func (a *api) listenRealtime(ctx context.Context) error {
 				pcm, e := base64.StdEncoding.DecodeString(ev.PCM)
 				if e != nil {
 					continue
+				}
+				if active && !waitingResponse && !followUpUntil.IsZero() && time.Now().After(followUpUntil) {
+					active = false
+					followUpUntil = time.Time{}
+					preroll = nil
+					_ = os.Remove(conversationFile)
+					h.set("idle", 0)
 				}
 				preroll = append(preroll, pcm)
 				if len(preroll) > 24 {
@@ -122,8 +139,12 @@ func (a *api) listenRealtime(ctx context.Context) error {
 					}
 				}
 			case "mode":
-				if ev.Mode == "listening" && !active {
+				if ev.Mode == "listening" && !active && !waitingResponse {
 					active = true
+					followUpUntil = time.Now().Add(followUpWindow)
+					if e := os.WriteFile(conversationFile, []byte("active\n"), 0600); e != nil {
+						return e
+					}
 					h.set("listening", 0)
 					for _, chunk := range preroll {
 						resampled, e := pcm16to24(chunk)
@@ -141,6 +162,10 @@ func (a *api) listenRealtime(ctx context.Context) error {
 					h.set("idle", 0)
 				}
 			case "partial":
+				if active && !waitingResponse && strings.TrimSpace(ev.Result.Partial) != "" {
+					followUpUntil = time.Now().Add(followUpWindow)
+					h.set("listening", followUpWindow)
+				}
 				if strings.Contains(strings.ToLower(ev.Result.Partial), wake) {
 					h.set("listening", 10*time.Second)
 				}
@@ -154,6 +179,8 @@ func (a *api) listenRealtime(ctx context.Context) error {
 				}
 				q, found := wakeQuestion(text, wake)
 				if found && q == "" {
+					followUpUntil = time.Now().Add(followUpWindow)
+					h.set("listening", followUpWindow)
 					continue
 				}
 				recent := calls[:0]
@@ -167,6 +194,8 @@ func (a *api) listenRealtime(ctx context.Context) error {
 					fmt.Fprintln(os.Stderr, "Rate limit: six questions per minute")
 					_ = w.sendJSON(map[string]any{"type": "input_audio_buffer.clear"})
 					active = false
+					followUpUntil = time.Time{}
+					_ = os.Remove(conversationFile)
 					h.set("idle", 0)
 					continue
 				}
@@ -179,6 +208,7 @@ func (a *api) listenRealtime(ctx context.Context) error {
 				}
 				active = false
 				waitingResponse = true
+				followUpUntil = time.Time{}
 				_ = os.WriteFile(muteFile, []byte("busy\n"), 0600)
 				h.set("thinking", 0)
 				fmt.Println("Question sent as audio to Realtime")
