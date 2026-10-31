@@ -50,6 +50,9 @@ type hardware struct {
  volumeUntil time.Time
  displayUntil time.Time
  display volumeDisplay
+	ambient ambientLight
+	displayBrightness int
+	displayTarget int
 	timeZone *time.Location
  leds [6][3]ledChannel
  cancel context.CancelFunc
@@ -87,6 +90,11 @@ func startHardware(parent context.Context,timeZone *time.Location)*hardware{
  ctx,cancel:=context.WithCancel(parent)
 	if timeZone==nil{timeZone=time.UTC}
 	h:=&hardware{state:"loading",cancel:cancel,timeZone:timeZone}
+	h.displayBrightness=80
+	h.displayTarget=80
+	h.display.brightnessLevel=80
+	h.ambient=findAmbientLight()
+	if h.ambient.path!=""{fmt.Fprintln(os.Stderr,"Ambient light sensor:",h.ambient.path)}else{fmt.Fprintln(os.Stderr,"Ambient light sensor: unavailable; using fixed display brightness")}
  root:=env("MINI3_LED_ROOT","/sys/class/leds")
  h.display.root=root
  opened:=0
@@ -149,6 +157,13 @@ func(h *hardware)draw(frame [6][3]int){
 func(h *hardware)animate(ctx context.Context){
  defer h.wg.Done();ticker:=time.NewTicker(100*time.Millisecond);defer ticker.Stop();tick:=0
  for{select{case <-ctx.Done():return;case now:=<-ticker.C:
+  if tick%10==0 {
+   if lux,ok:=h.ambient.readLux();ok {
+    h.displayTarget=displayBrightness(lux)
+   }
+  }
+  h.displayBrightness=approachBrightness(h.displayBrightness,h.displayTarget,displayBrightnessRampStep)
+  h.display.setBrightness(h.displayBrightness)
   h.mu.Lock()
   if !h.until.IsZero() && now.After(h.until){h.state="idle";h.until=time.Time{}}
   frame:=ringFrame(h.state,tick,h.volume,now.Before(h.volumeUntil))

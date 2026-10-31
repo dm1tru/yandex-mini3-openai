@@ -26,7 +26,7 @@ func clockDigits(now time.Time)[4]string{
  return out
 }
 type displayLED struct{path,triggerPath,trigger string;before,maximum int}
-type volumeDisplay struct{root string;active bool;pattern [4]string;colon bool;leds []displayLED;syncPath,syncTrigger string}
+type volumeDisplay struct{root string;active bool;pattern [4]string;colon bool;brightnessLevel int;leds []displayLED;syncPath,syncTrigger string}
 func readNumber(path string,fallback int)int{
  b,e:=os.ReadFile(path);if e!=nil{return fallback};n,e:=strconv.Atoi(strings.TrimSpace(string(b)));if e!=nil{return fallback};return n
 }
@@ -35,7 +35,14 @@ func(d *volumeDisplay)showVolume(level int){
 }
 func(d *volumeDisplay)showCall(){d.show(callDigits(),false)}
 func(d *volumeDisplay)showClock(now time.Time){d.show(clockDigits(now),now.Second()%2==0)}
+func(d *volumeDisplay)setBrightness(level int){
+	if level<5{level=5};if level>255{level=255}
+	if d.brightnessLevel==level{return}
+	d.brightnessLevel=level
+ d.pattern=[4]string{} // redraw the current digits at the new level
+}
 func(d *volumeDisplay)show(digits [4]string,colon bool){
+ if d.brightnessLevel<=0{d.brightnessLevel=80}
  if !d.active{
   paths,_:=filepath.Glob(filepath.Join(d.root,"bergamot:white:clock*","brightness"))
   if len(paths)==0{return}
@@ -53,9 +60,9 @@ func(d *volumeDisplay)show(digits [4]string,colon bool){
   name:=strings.TrimPrefix(filepath.Base(filepath.Dir(led.path)),"bergamot:white:clock")
   brightness:=0
   if len(name)==2 && name[0]>='A' && name[0]<='G' && name[1]>='0' && name[1]<='3'{
-   if strings.ContainsRune(digits[name[1]-'0'],rune(name[0])){brightness=led.maximum*80/255}
+   if strings.ContainsRune(digits[name[1]-'0'],rune(name[0])){brightness=led.maximum*d.brightnessLevel/255}
   }else if (name=="DH" || name=="DL") && colon{
-   brightness=led.maximum*80/255
+   brightness=led.maximum*d.brightnessLevel/255
   }
   _=os.WriteFile(led.path,[]byte(strconv.Itoa(brightness)+"\n"),0644)
  }
