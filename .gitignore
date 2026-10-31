@@ -4,6 +4,7 @@
 !/.gitattributes
 !/.dockerignore
 !/README.md
+!/AGENTS.md
 !/OPENAI.md
 !/VOSK.md
 !/VPN-REPAIR.md
