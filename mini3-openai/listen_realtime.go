@@ -28,7 +28,7 @@ const followUpWindow = 20 * time.Second
 const conversationFile = "/tmp/mini3-openai-conversation"
 
 func (a *api) listenRealtime(ctx context.Context) error {
-	h := startHardware(ctx)
+	h := startHardware(ctx, a.timeZone)
 	defer h.close()
 	_ = os.Remove(muteFile)
 	_ = os.Remove(conversationFile)

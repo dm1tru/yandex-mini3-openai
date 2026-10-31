@@ -4,5 +4,6 @@
   "tts_model": "gpt-4o-mini-tts",
   "voice": "coral",
   "wake_word": "компьютер",
-  "mic_gain": 48
+  "mic_gain": 48,
+  "timezone": "Europe/Moscow"
 }

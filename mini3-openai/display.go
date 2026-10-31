@@ -6,10 +6,11 @@ import (
  "path/filepath"
  "strconv"
  "strings"
+ "time"
 )
 
 // Clock exposes four seven-segment digits A..G, indices 0..3.
-// Seven-segment letters spell CALL during the active conversation window.
+// The assistant updates HH:MM itself while the stock clock process is stopped.
 func volumeDigits(volume int)[4]string{
  if volume<0{volume=0};if volume>100{volume=100}
  masks:=[10]string{"ABCDEF","BC","ABDEG","ABCDG","BCFG","ACDFG","ACDEFG","ABC","ABCDEFG","ABCDFG"}
@@ -18,16 +19,23 @@ func volumeDigits(volume int)[4]string{
  return out
 }
 func callDigits()[4]string{return [4]string{"ADEF","ABCEFG","DEF","DEF"}}
+func clockDigits(now time.Time)[4]string{
+ value:=now.Format("1504");var out [4]string
+ masks:=[10]string{"ABCDEF","BC","ABDEG","ABCDG","BCFG","ACDFG","ACDEFG","ABC","ABCDEFG","ABCDFG"}
+ for i,c:=range value{out[i]=masks[c-'0']}
+ return out
+}
 type displayLED struct{path,triggerPath,trigger string;before,maximum int}
-type volumeDisplay struct{root string;active bool;pattern [4]string;leds []displayLED;syncPath,syncTrigger string}
+type volumeDisplay struct{root string;active bool;pattern [4]string;colon bool;leds []displayLED;syncPath,syncTrigger string}
 func readNumber(path string,fallback int)int{
  b,e:=os.ReadFile(path);if e!=nil{return fallback};n,e:=strconv.Atoi(strings.TrimSpace(string(b)));if e!=nil{return fallback};return n
 }
 func(d *volumeDisplay)showVolume(level int){
- d.show(volumeDigits(level))
+ d.show(volumeDigits(level),false)
 }
-func(d *volumeDisplay)showCall(){d.show(callDigits())}
-func(d *volumeDisplay)show(digits [4]string){
+func(d *volumeDisplay)showCall(){d.show(callDigits(),false)}
+func(d *volumeDisplay)showClock(now time.Time){d.show(clockDigits(now),now.Second()%2==0)}
+func(d *volumeDisplay)show(digits [4]string,colon bool){
  if !d.active{
   paths,_:=filepath.Glob(filepath.Join(d.root,"bergamot:white:clock*","brightness"))
   if len(paths)==0{return}
@@ -38,14 +46,16 @@ func(d *volumeDisplay)show(digits [4]string){
    led.trigger=disableTrigger(trigger);d.leds=append(d.leds,led)
   }
   d.syncPath=filepath.Join(d.root,"cucumber:sync:clock-0","trigger");d.syncTrigger=disableTrigger(d.syncPath)
-  d.active=true;d.pattern=[4]string{}
+  d.active=true;d.pattern=[4]string{};d.colon=false
  }
- if d.pattern==digits{return};d.pattern=digits
+ if d.pattern==digits && d.colon==colon{return};d.pattern=digits;d.colon=colon
  for _,led:=range d.leds{
   name:=strings.TrimPrefix(filepath.Base(filepath.Dir(led.path)),"bergamot:white:clock")
   brightness:=0
   if len(name)==2 && name[0]>='A' && name[0]<='G' && name[1]>='0' && name[1]<='3'{
    if strings.ContainsRune(digits[name[1]-'0'],rune(name[0])){brightness=led.maximum*80/255}
+  }else if (name=="DH" || name=="DL") && colon{
+   brightness=led.maximum*80/255
   }
   _=os.WriteFile(led.path,[]byte(strconv.Itoa(brightness)+"\n"),0644)
  }
@@ -57,5 +67,5 @@ func(d *volumeDisplay)restore(){
   if led.trigger!=""{_ =os.WriteFile(led.triggerPath,[]byte(led.trigger+"\n"),0644)}
  }
  if d.syncTrigger!=""{_ =os.WriteFile(d.syncPath,[]byte(d.syncTrigger+"\n"),0644)}
- d.active=false;d.leds=nil
+ d.active=false;d.pattern=[4]string{};d.colon=false;d.leds=nil
 }

@@ -9,6 +9,8 @@ import (
  "os"
  "strings"
  "unicode"
+	"time"
+	_ "time/tzdata"
 )
 
 const defaultConfigPath = "/data/opt/openai/config.json"
@@ -19,10 +21,11 @@ type modelConfig struct {
  Voice string `json:"voice"`
  WakeWord string `json:"wake_word"`
 	MicGain int `json:"mic_gain"`
+	TimeZone string `json:"timezone"`
 }
 
 func loadModelConfig(path string, optional bool, getenv func(string) string) (modelConfig,error) {
-	c:=modelConfig{Model:"gpt-4.1-mini",RealtimeModel:"gpt-realtime-2.1",TTSModel:"gpt-4o-mini-tts",Voice:"coral",WakeWord:"компьютер",MicGain:48}
+	c:=modelConfig{Model:"gpt-4.1-mini",RealtimeModel:"gpt-realtime-2.1",TTSModel:"gpt-4o-mini-tts",Voice:"coral",WakeWord:"компьютер",MicGain:48,TimeZone:"Europe/Moscow"}
  b,err:=os.ReadFile(path)
  if err!=nil && !(optional && errors.Is(err,os.ErrNotExist)){return c,fmt.Errorf("read model config: %w",err)}
  if err==nil {
@@ -35,7 +38,7 @@ func loadModelConfig(path string, optional bool, getenv func(string) string) (mo
   var extra any
   if d.Decode(&extra)!=io.EOF{return c,errors.New("unexpected data after model config")}
  }
- for _,v:=range []struct{key string; dst *string}{{"OPENAI_MODEL",&c.Model},{"OPENAI_REALTIME_MODEL",&c.RealtimeModel},{"OPENAI_TTS_MODEL",&c.TTSModel},{"OPENAI_VOICE",&c.Voice},{"OPENAI_WAKE_WORD",&c.WakeWord}} {
+	for _,v:=range []struct{key string; dst *string}{{"OPENAI_MODEL",&c.Model},{"OPENAI_REALTIME_MODEL",&c.RealtimeModel},{"OPENAI_TTS_MODEL",&c.TTSModel},{"OPENAI_VOICE",&c.Voice},{"OPENAI_WAKE_WORD",&c.WakeWord},{"OPENAI_TIMEZONE",&c.TimeZone}} {
   if s:=getenv(v.key);s!=""{*v.dst=s}
   *v.dst=strings.TrimSpace(*v.dst)
   if *v.dst=="" || strings.ContainsAny(*v.dst,"\r\n\t "){return c,fmt.Errorf("invalid value for %s",v.key)}
@@ -43,6 +46,7 @@ func loadModelConfig(path string, optional bool, getenv func(string) string) (mo
  c.WakeWord=strings.ToLower(c.WakeWord)
  for _,r:=range c.WakeWord{if !unicode.IsLetter(r){return c,errors.New("wake_word must be one word containing letters only")}}
 	if c.MicGain<0 || c.MicGain>48{return c,errors.New("mic_gain must be between 0 and 48")}
+	if _,err:=time.LoadLocation(c.TimeZone);err!=nil{return c,fmt.Errorf("invalid timezone %q",c.TimeZone)}
  return c,nil
 }
 func currentModelConfig()(modelConfig,error){

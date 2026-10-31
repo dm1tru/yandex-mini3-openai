@@ -50,6 +50,7 @@ type hardware struct {
  volumeUntil time.Time
  displayUntil time.Time
  display volumeDisplay
+	timeZone *time.Location
  leds [6][3]ledChannel
  cancel context.CancelFunc
  wg sync.WaitGroup
@@ -82,9 +83,10 @@ func(h *hardware)adjustMasterVolume(ctx context.Context,delta int)(int,error){
  actual,err:=mixerPercent(out);if err!=nil{return 0,err};h.recordVolume(actual);return actual,nil
 }
 
-func startHardware(parent context.Context)*hardware{
+func startHardware(parent context.Context,timeZone *time.Location)*hardware{
  ctx,cancel:=context.WithCancel(parent)
- h:=&hardware{state:"loading",cancel:cancel}
+	if timeZone==nil{timeZone=time.UTC}
+	h:=&hardware{state:"loading",cancel:cancel,timeZone:timeZone}
  root:=env("MINI3_LED_ROOT","/sys/class/leds")
  h.display.root=root
  opened:=0
@@ -151,7 +153,7 @@ func(h *hardware)animate(ctx context.Context){
   if !h.until.IsZero() && now.After(h.until){h.state="idle";h.until=time.Time{}}
   frame:=ringFrame(h.state,tick,h.volume,now.Before(h.volumeUntil))
   showVolume:=now.Before(h.displayUntil);level:=h.volume;conversationMode:=h.conversationMode;h.mu.Unlock()
-  if showVolume{h.display.showVolume(level)}else if conversationMode{h.display.showCall()}else{h.display.restore()}
+  if showVolume{h.display.showVolume(level)}else if conversationMode{h.display.showCall()}else{h.display.showClock(now.In(h.timeZone))}
   h.draw(frame);tick++
  }}
 }
